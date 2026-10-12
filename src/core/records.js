@@ -58,3 +58,64 @@ export function formatTime(ms) {
   const ss = String(s).padStart(2, '0');
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
 }
+
+// ── 하드 모드 기록 ──────────────────────────────────────────
+// 일반 모드와 따로 저장한다. 단계가 없으므로 '판 하나 = 시도 하나'를 쌓는다.
+//
+// ★ 첫 수를 두는 순간 시도가 시작된다 (플레이 횟수 +1, 최근 기록에 '진행 중'으로 한 줄).
+//   끝날 때 그 줄의 결과를 채운다 — 클리어 / 포기 / 막힘.
+//   창을 닫아 끝을 못 적은 줄은 '진행 중'으로 남고, 화면에서는 '중단'으로 보인다.
+//   판을 열자마자 나가는 것은 시도로 치지 않는다 (아직 아무것도 안 했다).
+
+export const HARD_RECENT_LIMIT = 10;
+export const HardResult = Object.freeze({ PLAYING: 'playing', CLEAR: 'clear', QUIT: 'quit', STUCK: 'stuck' });
+
+export function emptyHardRecord() {
+  return { plays: 0, clears: 0, bestTime: null, bestMoves: null, recent: [], nextId: 1 };
+}
+
+/**
+ * 시도 시작.
+ * @returns {{ record, id }} 새 기록과 이 시도의 번호 (끝낼 때 넘긴다)
+ */
+export function startHardAttempt(record, { seed, at }) {
+  const r = record ?? emptyHardRecord();
+  const id = r.nextId;
+  const entry = { id, seed, result: HardResult.PLAYING, moves: 0, undos: 0, timeMs: 0, at };
+  return {
+    record: { ...r, plays: r.plays + 1, nextId: id + 1, recent: [entry, ...r.recent].slice(0, HARD_RECENT_LIMIT) },
+    id,
+  };
+}
+
+/**
+ * 시도 끝. 최근 기록의 그 줄을 채우고, 클리어면 최단 시간·최소 이동을 견준다.
+ * 그 줄이 이미 10판 밖으로 밀려났어도 횟수·최고 기록은 반영한다.
+ * @param info { id, seed, result, moves, undos, timeMs }
+ * @returns {{ record, isNew: { first, time, moves } }}
+ */
+export function finishHardAttempt(record, { id, seed: givenSeed, result, moves, undos, timeMs }) {
+  const r = record ?? emptyHardRecord();
+  const target = r.recent.find((e) => e.id === id);
+  // ⚠️ 이미 끝난 시도는 다시 끝내지 않는다 — 클리어를 적은 뒤 화면을 떠나며 '포기'로 덮거나, 클리어를 두 번 세는 일을 막는다
+  if (target && target.result !== HardResult.PLAYING) return { record: r, isNew: { first: false, time: false, moves: false } };
+  const seed = givenSeed ?? target?.seed ?? null;
+  const recent = r.recent.map((e) => (e.id === id ? { ...e, result, moves, undos, timeMs } : e));
+  const isNew = { first: false, time: false, moves: false };
+  let { clears, bestTime, bestMoves } = r;
+
+  if (result === HardResult.CLEAR) {
+    isNew.first = clears === 0;
+    clears += 1;
+    const entry = { timeMs, moves, undos, seed };
+    if (!bestTime || timeMs < bestTime.timeMs) {
+      isNew.time = !isNew.first;
+      bestTime = entry;
+    }
+    if (!bestMoves || moves < bestMoves.moves || (moves === bestMoves.moves && timeMs < bestMoves.timeMs)) {
+      isNew.moves = !isNew.first;
+      bestMoves = entry;
+    }
+  }
+  return { record: { ...r, clears, bestTime, bestMoves, recent }, isNew };
+}

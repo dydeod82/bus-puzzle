@@ -21,22 +21,27 @@ export class BoardInput {
   /**
    * @param handlers { push(i, sign), undo(), restart(), exit() }
    * @param options.keyboard false면 키보드를 받지 않는다 (규칙 창의 작은 연습 판)
+   * @param options.zoom     true면 확대·이동을 받는다 — 두 손가락 벌리기/모으기, 마우스 휠, 빈 곳을 끌어 이동 (하드 모드 25×25)
    */
-  constructor(canvas, renderer, handlers, { keyboard = true } = {}) {
+  constructor(canvas, renderer, handlers, { keyboard = true, zoom = false } = {}) {
     this.canvas = canvas;
     this.renderer = renderer;
     this.h = handlers;
     this.keyboard = keyboard;
+    this.zoomable = zoom;
     this.enabled = false;
-    this.down = null;
+    this.down = null;          // 한 손가락(또는 마우스)으로 누른 것 { id, x, y, hit, panning, lastX, lastY }
+    this.pointers = new Map(); // 지금 화면에 닿아 있는 포인터들
+    this.pinch = null;         // 두 손가락 { dist, midX, midY }
     this.selected = -1;
     this.keyboardMode = false;
 
     canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
     canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
     canvas.addEventListener('pointerup', (e) => this.onPointerUp(e));
-    canvas.addEventListener('pointercancel', () => { this.down = null; });
+    canvas.addEventListener('pointercancel', (e) => this.onPointerCancel(e));
     canvas.addEventListener('pointerleave', () => this.renderer.setHover(null));
+    if (zoom) canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     if (keyboard) window.addEventListener('keydown', (e) => this.onKeyDown(e));
   }
 
@@ -47,6 +52,8 @@ export class BoardInput {
   disable() {
     this.enabled = false;
     this.down = null;
+    this.pinch = null;
+    this.pointers.clear();
     this.renderer.setHover(null);
   }
 
@@ -67,7 +74,7 @@ export class BoardInput {
   onPointerDown(e) {
     if (!this.enabled || (e.pointerType === 'mouse' && e.button !== 0)) return;
     const pt = this.local(e);
-    this.down = { id: e.pointerId, ...pt, hit: this.renderer.hitTest(pt.x, pt.y) };
+    this.pointers.set(e.pointerId, pt);
     // 판 밖으로 끌고 나가 손을 떼도 pointerup을 받도록. 이미 끝난 포인터면 예외를 던지므로 삼킨다
     try {
       this.canvas.setPointerCapture(e.pointerId);
@@ -78,21 +85,74 @@ export class BoardInput {
       this.keyboardMode = false;
       this.renderer.setSelected(-1);
     }
+
+    // 두 번째 손가락 — 누르기는 취소하고 확대/이동으로 바꾼다
+    if (this.zoomable && this.pointers.size === 2) {
+      this.down = null;
+      this.pinch = this.pinchShape();
+      return;
+    }
+    if (this.pointers.size > 1) return;
+    this.down = { id: e.pointerId, ...pt, hit: this.renderer.hitTest(pt.x, pt.y), panning: false, lastX: pt.x, lastY: pt.y };
+  }
+
+  pinchShape() {
+    const [a, b] = [...this.pointers.values()];
+    return { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, midX: (a.x + b.x) / 2, midY: (a.y + b.y) / 2 };
   }
 
   onPointerMove(e) {
     if (!this.enabled) return;
-    if (e.pointerType !== 'mouse' || this.down) return;
+    if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, this.local(e));
+
+    if (this.pinch && this.pointers.size >= 2) {
+      const now = this.pinchShape();
+      this.renderer.zoomAt(now.dist / this.pinch.dist, now.midX, now.midY);
+      this.renderer.panBy(now.midX - this.pinch.midX, now.midY - this.pinch.midY);
+      this.pinch = now;
+      return;
+    }
+
+    const d = this.down;
+    if (d && d.id === e.pointerId) {
+      // 빈 곳을 끌면 판을 옮긴다 (차 위에서 시작한 끌기는 '밀기'라 손대지 않는다)
+      if (this.zoomable && !d.hit) {
+        const pt = this.local(e);
+        if (!d.panning && Math.hypot(pt.x - d.x, pt.y - d.y) >= DRAG_THRESHOLD) d.panning = true;
+        if (d.panning) {
+          this.renderer.panBy(pt.x - d.lastX, pt.y - d.lastY);
+          this.canvas.style.cursor = 'grabbing';
+        }
+        d.lastX = pt.x;
+        d.lastY = pt.y;
+      }
+      return;
+    }
+
+    if (e.pointerType !== 'mouse') return;
     const pt = this.local(e);
     const hit = this.renderer.hitTest(pt.x, pt.y);
     this.renderer.setHover(hit ? { vehicle: hit.vehicle, sign: hit.sign } : null);
-    this.canvas.style.cursor = hit ? 'pointer' : 'default';
+    this.canvas.style.cursor = hit ? 'pointer' : this.zoomable && this.renderer.view.zoom > 1.01 ? 'grab' : 'default';
+  }
+
+  onPointerCancel(e) {
+    this.pointers.delete(e.pointerId);
+    if (this.pointers.size < 2) this.pinch = null;
+    this.down = null;
   }
 
   onPointerUp(e) {
+    this.pointers.delete(e.pointerId);
+    if (this.pinch) {
+      // 확대하던 손가락을 떼는 중 — 남은 손가락으로 누르기가 되지 않게
+      if (this.pointers.size < 2) this.pinch = null;
+      this.down = null;
+      return;
+    }
     const d = this.down;
     this.down = null;
-    if (!this.enabled || !d || d.id !== e.pointerId || !d.hit) return;
+    if (!this.enabled || !d || d.id !== e.pointerId || !d.hit || d.panning) return;
     const pt = this.local(e);
     const dx = pt.x - d.x;
     const dy = pt.y - d.y;
@@ -114,6 +174,13 @@ export class BoardInput {
       const hit = this.renderer.hitTest(pt.x, pt.y);
       this.renderer.setHover(hit ? { vehicle: hit.vehicle, sign: hit.sign } : null);
     }
+  }
+
+  onWheel(e) {
+    if (!this.enabled) return;
+    e.preventDefault();
+    const pt = this.local(e);
+    this.renderer.zoomAt(Math.exp(-e.deltaY * 0.0015), pt.x, pt.y);
   }
 
   // ── 키보드 ────────────────────────────────────────────

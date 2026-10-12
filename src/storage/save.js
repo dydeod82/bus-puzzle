@@ -1,8 +1,10 @@
-// 저장 — localStorage. 해금 단계·단계별 기록·자유 모드 설정, 그리고 만들어 둔 판(캐시).
+// 저장 — localStorage. 해금 단계·단계별 기록·자유 모드 설정·하드 모드 기록(따로), 그리고 만들어 둔 판(캐시).
 //
 // ⚠️ localStorage는 사생활 보호 모드·저장 공간 꽉 참·itch.io 같은 iframe의 제3자 저장 차단에서
 //    읽기·쓰기가 예외를 던질 수 있다. 전부 try/catch로 감싸고, 못 쓰면 이번 방문 동안만 기억한다.
 // ⚠️ 저장된 값은 사용자가 손댈 수 있으므로 읽을 때 모양을 다시 확인한다 (깨진 값으로 화면이 멈추지 않게).
+
+import { emptyHardRecord, HardResult, HARD_RECENT_LIMIT } from '../core/records.js';
 
 const SAVE_KEY = 'bus-puzzle:save:v1';
 const CACHE_KEY = 'bus-puzzle:puzzles:v1';
@@ -61,8 +63,43 @@ function cleanRecord(r) {
   return { clears: r.clears, stars: r.stars, par: isInt(r.par) ? r.par : null, bestMoves, bestTime };
 }
 
+const RESULTS = new Set(Object.values(HardResult));
+
+function cleanHardBest(b) {
+  return b && Number.isFinite(b.timeMs) && isInt(b.moves)
+    ? { timeMs: b.timeMs, moves: b.moves, undos: isInt(b.undos) ? b.undos : 0, seed: typeof b.seed === 'string' ? b.seed : null }
+    : null;
+}
+
+/** 하드 모드 기록 — 깨진 값은 버리고 모양을 맞춘다 */
+function cleanHard(h) {
+  const base = emptyHardRecord();
+  if (!h || typeof h !== 'object') return base;
+  const recent = (Array.isArray(h.recent) ? h.recent : [])
+    .filter((e) => e && isInt(e.id) && typeof e.seed === 'string' && RESULTS.has(e.result))
+    .slice(0, HARD_RECENT_LIMIT)
+    .map((e) => ({
+      id: e.id,
+      seed: e.seed.slice(0, 40),
+      result: e.result,
+      moves: isInt(e.moves) ? e.moves : 0,
+      undos: isInt(e.undos) ? e.undos : 0,
+      timeMs: Number.isFinite(e.timeMs) ? e.timeMs : 0,
+      at: Number.isFinite(e.at) ? e.at : 0,
+    }));
+  const maxId = recent.reduce((m, e) => Math.max(m, e.id), 0);
+  return {
+    plays: isInt(h.plays) ? h.plays : recent.length,
+    clears: isInt(h.clears) ? h.clears : 0,
+    bestTime: cleanHardBest(h.bestTime),
+    bestMoves: cleanHardBest(h.bestMoves),
+    recent,
+    nextId: Math.max(isInt(h.nextId) ? h.nextId : 1, maxId + 1),
+  };
+}
+
 /**
- * @returns {{ unlocked: number, records: Object<string, record>, free: object }}
+ * @returns {{ unlocked: number, records: Object<string, record>, free: object, hard: object }}
  *   unlocked — 플레이할 수 있는 가장 높은 단계 (1부터)
  */
 export function loadSave(levelCount) {
@@ -76,11 +113,13 @@ export function loadSave(levelCount) {
   const free = { ...FREE_DEFAULTS };
   for (const key of ['size', 'cars', 'buses', 'blocks']) if (isInt(raw.free?.[key])) free[key] = raw.free[key];
   if (typeof raw.free?.seed === 'string') free.seed = raw.free.seed.slice(0, 40);
-  return { unlocked, records, free };
+  return { unlocked, records, free, hard: cleanHard(raw.hard) };
 }
 
 export function writeSave(save) {
-  return writeJson(SAVE_KEY, { version: 1, unlocked: save.unlocked, records: save.records, free: save.free });
+  return writeJson(SAVE_KEY, {
+    version: 1, unlocked: save.unlocked, records: save.records, free: save.free, hard: save.hard ?? emptyHardRecord(),
+  });
 }
 
 // ── 만들어 둔 판 ──────────────────────────────────────────

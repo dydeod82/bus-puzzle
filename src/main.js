@@ -1,16 +1,18 @@
 // 시작점 — 화면들을 잇고, 한 판을 시작·마무리하고, 기록을 저장한다.
 
-import { LEVELS, LEVEL_COUNT, freeModeParams } from './core/levels.js';
+import { LEVELS, LEVEL_COUNT, HARD_MODE, freeModeParams } from './core/levels.js';
+import { hardPuzzleParams } from './core/hardMode.js';
 import { createPuzzle } from './core/rules.js';
-import { mergeRecord, starsFor } from './core/records.js';
+import { mergeRecord, starsFor, startHardAttempt, finishHardAttempt, HardResult } from './core/records.js';
 import { randomSeedString } from './core/random.js';
 import { loadSave, writeSave } from './storage/save.js';
 import { loadPuzzle } from './ui/puzzleLoader.js';
 import { Screens } from './ui/screens.js';
 import { GameScreen } from './ui/gameScreen.js';
+import { HardScreen } from './ui/hardScreen.js';
 import { renderLevelSelect } from './ui/levelSelect.js';
 import { renderResult } from './ui/resultScreen.js';
-import { renderRecords } from './ui/recordsScreen.js';
+import { renderRecords, setupRecords } from './ui/recordsScreen.js';
 import { FreeModeScreen } from './ui/freeMode.js';
 import { RulesDialog } from './ui/rulesDialog.js';
 
@@ -20,7 +22,7 @@ const save = loadSave(LEVEL_COUNT);
 const app = document.getElementById('app');
 const screens = new Screens(app);
 
-/** 지금 하는 판 — { mode: 'level' | 'free', level, settings, seed, data, title, subtitle } */
+/** 지금 하는 판 — { mode: 'level' | 'free' | 'hard', level, settings, seed, data, title, subtitle } */
 let play = null;
 let loadToken = 0;
 
@@ -34,6 +36,27 @@ const game = new GameScreen(screens.el('game'), {
   onRules: () => rules.open(),
 });
 
+const hard = new HardScreen(screens.el('hard'), {
+  onClear: (run) => finishHard(run),
+  onExit: () => screens.show('title'),
+  onRules: () => rules.open(),
+  onNewBoard: () => playHard(randomSeedString()),
+  onSeed: (seed) => playHard(seed),
+  // 하드 모드 기록 — 일반 모드와 따로 (save.hard)
+  onAttemptStart: ({ seed }) => {
+    const r = startHardAttempt(save.hard, { seed, at: Date.now() });
+    save.hard = r.record;
+    writeSave(save);
+    return r.id;
+  },
+  onAttemptEnd: (info) => {
+    save.hard = finishHardAttempt(save.hard, info).record;
+    writeSave(save);
+  },
+});
+
+const recordsUi = setupRecords(screens.el('records'), { onPlaySeed: (seed) => playHard(seed) });
+
 const free = new FreeModeScreen(screens.el('free'), {
   onChange: (s) => {
     save.free = s;
@@ -44,9 +67,13 @@ const free = new FreeModeScreen(screens.el('free'), {
 
 screens.on('title', { show: updateTitle });
 screens.on('levels', { show: () => renderLevelSelect(document.getElementById('route'), save, playLevel) });
-screens.on('records', { show: () => renderRecords(screens.el('records'), save) });
+screens.on('records', { show: (tab = 'normal') => {
+  renderRecords(screens.el('records'), save);
+  recordsUi.select(tab);
+} });
 screens.on('free', { show: () => free.load(save.free) });
 screens.on('game', { hide: () => game.stop() });
+screens.on('hard', { hide: () => hard.stop() });
 
 // ── 버튼 ────────────────────────────────────────────────
 
@@ -55,6 +82,7 @@ app.addEventListener('click', (e) => {
   if (!btn || btn.disabled) return;
   switch (btn.dataset.action) {
     case 'start': screens.show('levels'); break;
+    case 'hard': playHard(randomSeedString()); break;
     case 'records': screens.show('records'); break;
     case 'free': if (freeUnlocked()) screens.show('free'); break;
     case 'rules-open': rules.open(); break;
@@ -119,11 +147,52 @@ async function startPuzzle(params, seed, title, subtitleOf) {
   }
 }
 
+/**
+ * 하드 모드 — 시작할 때마다 새 시드 (시드를 넣으면 그 판).
+ * ⚠️ 판 생성 시드는 generateHardPuzzle과 똑같이 `hard:${seed}`로 넘긴다 — 다르면 같은 시드라도 Node(테스트)와 화면의 판이 갈린다
+ */
+async function playHard(seed) {
+  const token = ++loadToken;
+  play = { mode: 'hard', seed };
+  screens.show('hard');
+  hard.showLoading(seed);
+  try {
+    const data = await loadPuzzle(hardPuzzleParams(HARD_MODE), `hard:${seed}`);
+    if (token !== loadToken || screens.current !== 'hard') return;
+    play.data = data;
+    hard.start({ puzzle: createPuzzle(data.def), seed, config: HARD_MODE });
+  } catch (err) {
+    if (token !== loadToken || screens.current !== 'hard') return;
+    hard.showError(err?.message ?? '판을 만들지 못했어요.');
+  }
+}
+
+function finishHard(run) {
+  const r = finishHardAttempt(save.hard, {
+    id: run.attemptId, seed: run.seed, result: HardResult.CLEAR, moves: run.moves, undos: run.undos, timeMs: run.timeMs,
+  });
+  save.hard = r.record;
+  writeSave(save);
+  renderResult(screens.el('result'), {
+    kicker: '하드 모드 클리어',
+    title: `시드 ${run.seed}`,
+    run: { ...run, par: null },
+    stars: null,
+    isNew: { first: r.isNew.first, moves: r.isNew.moves, time: r.isNew.time, stars: false },
+    nextLabel: '새 판',
+  });
+  screens.show('result');
+}
+
 function begin() {
   game.start({ puzzle: createPuzzle(play.data.def), par: play.data.par, title: play.title, subtitle: play.subtitle });
 }
 
 function replay() {
+  if (play?.mode === 'hard') {
+    playHard(play.seed);   // 같은 시드 — 만들어 둔 판을 기억하고 있어 바로 열린다
+    return;
+  }
   if (!play?.data) return;
   screens.show('game');
   begin();
@@ -133,6 +202,8 @@ function next() {
   if (play?.mode === 'level') {
     if (play.level < LEVEL_COUNT) playLevel(play.level + 1);
     else screens.show('free');
+  } else if (play?.mode === 'hard') {
+    playHard(randomSeedString());
   } else if (play?.mode === 'free') {
     const settings = { ...play.settings, seed: randomSeedString() };
     save.free = settings;
@@ -172,5 +243,8 @@ function finishPlay(run) {
   }
   screens.show('result');
 }
+
+// 이 PC에서 열었을 때만 — 브라우저 콘솔에서 상태를 들여다보는 손잡이 (배포한 페이지에는 생기지 않는다)
+if (['localhost', '127.0.0.1'].includes(location.hostname)) window.__busPuzzle = { screens, game, hard, save };
 
 screens.show('title');

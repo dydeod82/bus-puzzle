@@ -111,6 +111,42 @@ export function createPuzzle(def) {
   });
 }
 
+/**
+ * 차량 한 대를 더한 새 퍼즐 (하드 모드의 '새 차량 도착'). 원래 퍼즐은 그대로 두고 새 객체를 돌려준다.
+ * 겹침은 검사하지 않는다 — 놓을 자리는 부르는 쪽이 지금 위치(pos)를 보고 고른다 (start는 처음 배치라 쓸 수 없다).
+ * @param v { kind, x, y, front } — createPuzzle의 차량 정의와 같은 모양
+ * @returns {{ puzzle, id, p }} p = 새 차량의 위치 (pos 배열에 이어 붙일 값)
+ */
+export function withVehicle(puzzle, v) {
+  const len = VEHICLE_LENGTH[v.kind];
+  const d = DIRECTIONS[v.front];
+  if (!len || !d) throw new Error(`추가할 차량 정의가 올바르지 않습니다: ${JSON.stringify(v)}`);
+  for (let k = 0; k < len; k++) {
+    assertInside(puzzle.size, d.axis === 'h' ? v.x + k : v.x, d.axis === 'h' ? v.y : v.y + k, '추가할 차량');
+  }
+  const id = puzzle.vehicles.length;
+  const p = d.axis === 'h' ? v.x : v.y;
+  const vehicle = Object.freeze({
+    id,
+    kind: v.kind,
+    len,
+    axis: d.axis,
+    lane: d.axis === 'h' ? v.y : v.x,
+    front: d.sign,
+    frontDir: v.front,
+    label: v.label ?? null,
+  });
+  return {
+    puzzle: Object.freeze({
+      ...puzzle,
+      vehicles: Object.freeze([...puzzle.vehicles, vehicle]),
+      start: Object.freeze([...puzzle.start, p]),
+    }),
+    id,
+    p,
+  };
+}
+
 function assertInside(size, x, y, what) {
   if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= size || y >= size) {
     throw new Error(`${what}이(가) 판 밖에 있습니다: (${x}, ${y}), 판 크기 ${size}`);

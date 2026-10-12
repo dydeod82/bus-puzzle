@@ -73,3 +73,25 @@ export function freeSettingsProblem(s) {
   if (freeFill(s) > FREE_MAX_FILL) return '판이 너무 빽빽해요. 차량이나 구조물을 줄여 주세요.';
   return null;
 }
+
+// ── 하드 모드 ──────────────────────────────────────────────
+// 숫자만 바꿔 조정한다. 판은 시작할 때마다 새 시드로 만든다.
+//
+//   size, safeSize  판 크기와 정중앙 안전구역 크기 — (size − safeSize)가 짝수여야 가운데에 놓인다 (25 = 10 + 5 + 10)
+//   startVehicles   시작 차량 수, busRatio 그중 버스 비율 (새로 도착하는 차량의 종류도 이 비율로 뽑는다)
+//   blocks          고정 구조물 수
+//   maxExitable     시작하자마자 바로 나갈 수 있는 차량 수 상한 (판 생성 조건)
+//   randomMin/Max   한 턴에 변화구역에서 저절로 움직이는 차량 수 범위
+//   spawnDelay      탈출이 생긴 뒤 새 차량이 도착하기까지의 턴 수
+
+export const HARD_MODE = Object.freeze({
+  size: 25,
+  safeSize: 5,
+  startVehicles: 50,
+  busRatio: 0.3,
+  blocks: 30,
+  maxExitable: 8,
+  randomMin: 1,
+  randomMax: 4,
+  spawnDelay: 3,
+});

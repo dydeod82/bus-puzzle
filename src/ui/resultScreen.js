@@ -17,14 +17,17 @@ export function renderResult(root, info) {
   $('result-kicker').textContent = info.kicker;
   $('result-title').textContent = info.title;
   $('result-moves').textContent = `${run.moves}수`;
-  $('result-par').textContent = `${run.par}수`;
+  // 하드 모드는 랜덤 요소 때문에 '목표 이동 수'와 별점이 없다
+  $('result-par-row').hidden = run.par == null;
+  $('result-par').textContent = run.par == null ? '' : `${run.par}수`;
   $('result-time').textContent = formatTime(run.timeMs);
   $('result-undos').textContent = `${run.undos}회`;
 
   const stars = $('result-stars');
   stars.replaceChildren();
+  stars.hidden = info.stars == null;
   stars.setAttribute('aria-label', `별 ${info.stars}개`);
-  for (let k = 0; k < 3; k++) {
+  for (let k = 0; k < (info.stars == null ? 0 : 3); k++) {
     const s = document.createElement('span');
     s.className = `stamp${k < info.stars ? ' on' : ''}`;
     s.style.setProperty('--d', `${0.25 + k * 0.22}s`);
@@ -40,8 +43,8 @@ export function renderResult(root, info) {
     li.textContent = text;
     badges.append(li);
   };
-  if (run.moves < run.par) add('목표보다 적게 풀었어요!', 'hot');
-  else if (run.moves === run.par) add('최소 이동으로 풀었어요', 'hot');
+  if (run.par != null && run.moves < run.par) add('목표보다 적게 풀었어요!', 'hot');
+  else if (run.par != null && run.moves === run.par) add('최소 이동으로 풀었어요', 'hot');
   if (info.isNew) {
     if (info.isNew.first) add('첫 클리어');
     if (info.isNew.moves) add('최소 이동 갱신', 'hot');

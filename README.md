@@ -16,10 +16,11 @@ BusPuzzle/
 │  ├─ core/                   ← 화면과 무관한 순수 로직. Node에서 그대로 테스트한다
 │  │  ├─ rules.js             규칙 엔진: 미끄러지기·탈출·클리어·막힘 판정
 │  │  ├─ game.js              한 판 진행: 이동 횟수·되돌리기·재시작·상태
+│  │  ├─ hardMode.js          하드 모드 규칙: 구역·랜덤 이동·새 차량·막힘·한 판 진행 (난수 상태까지 되돌린다)
 │  │  ├─ generator.js         판 생성기 (역방향 짓기 + '고리' 끼워 넣기)
 │  │  ├─ solver.js            솔버 (목표 이동 수)
-│  │  ├─ levels.js            1~10단계 설정 + 자유 모드 규칙  ← 숫자만 바꿔 난이도 조정
-│  │  ├─ records.js           별점·최고 기록 합치기·시간 표시
+│  │  ├─ levels.js            1~10단계 설정 + 자유 모드 규칙 + 하드 모드 설정(HARD_MODE)  ← 숫자만 바꿔 조정
+│  │  ├─ records.js           별점·최고 기록 합치기·시간 표시 + 하드 모드 기록(플레이·클리어·최근 10판)
 │  │  ├─ random.js            시드 난수
 │  │  └─ textBoard.js         글자 그림 ↔ 판 정의 (테스트·디버그)
 │  ├─ render/
@@ -28,9 +29,10 @@ BusPuzzle/
 │  │  ├─ screens.js           화면 전환
 │  │  ├─ input.js             마우스·터치·키보드 → 엔진 명령
 │  │  ├─ gameScreen.js        플레이 화면 (판·통계·막힘/나가기 안내·시계)
+│  │  ├─ hardScreen.js        하드 모드 화면 (구역·랜덤 이동 강조·카운트다운·확대·시드)
 │  │  ├─ levelSelect.js       단계 선택 (노선도)
 │  │  ├─ resultScreen.js      결과 (승차권)
-│  │  ├─ recordsScreen.js     기록
+│  │  ├─ recordsScreen.js     기록 ([일반] / [하드] 탭)
 │  │  ├─ freeMode.js          자유 모드 설정
 │  │  ├─ rulesDialog.js       규칙 창 + 연습 판
 │  │  └─ puzzleLoader.js      판 불러오기 (Web Worker + 캐시)

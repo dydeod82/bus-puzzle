@@ -16,10 +16,23 @@ export function hashSeed(seed) {
 
 /** 시드로 난수 발생기를 만든다 (sfc32) */
 export function createRng(seed) {
-  let a = hashSeed(`${seed}:a`);
-  let b = hashSeed(`${seed}:b`);
-  let c = hashSeed(`${seed}:c`);
-  let d = hashSeed(`${seed}:d`);
+  const rng = rngFromState([
+    hashSeed(`${seed}:a`),
+    hashSeed(`${seed}:b`),
+    hashSeed(`${seed}:c`),
+    hashSeed(`${seed}:d`),
+  ]);
+  // 처음 몇 개는 시드 티가 나므로 버린다
+  for (let i = 0; i < 12; i++) rng.next();
+  return rng;
+}
+
+/**
+ * 저장해 둔 상태(getState()의 결과)에서 이어 가는 난수 발생기.
+ * ★ 하드 모드는 난수 상태를 게임 상태에 넣어 되돌리기 때 함께 되돌린다 — 같은 수를 다시 두면 같은 결과가 나오게.
+ */
+export function rngFromState(state) {
+  let [a, b, c, d] = state;
 
   function next() {
     a >>>= 0; b >>>= 0; c >>>= 0; d >>>= 0;
@@ -32,11 +45,13 @@ export function createRng(seed) {
     c = (c + t) | 0;
     return (t >>> 0) / 4294967296;
   }
-  // 처음 몇 개는 시드 티가 나므로 버린다
-  for (let i = 0; i < 12; i++) next();
 
   return {
     next,
+    /** 지금 상태 — 숫자 4개짜리 배열. rngFromState에 넘기면 여기서부터 똑같이 이어진다 */
+    getState() {
+      return [a >>> 0, b >>> 0, c >>> 0, d >>> 0];
+    },
     /** 0 이상 n 미만 정수 */
     int(n) {
       return Math.floor(next() * n);

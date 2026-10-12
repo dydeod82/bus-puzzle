@@ -4,16 +4,20 @@
 //   이동하면 엔진 상태는 즉시 바뀌고, 여기서는 그 사이를 짧게 이어 그릴 뿐이다.
 //   그래서 애니메이션 도중에 다른 차를 눌러도 판정이 어긋나지 않는다.
 //
+// ★ 차량마다 애니메이션 '줄'(anims)을 둔다. 하드 모드는 한 턴에 플레이어 이동 → 랜덤 이동 여러 대 → 새 차량이
+//   차례로 일어나는데, 같은 차가 두 번 움직일 수도 있다. 줄에 시작 시각을 달아 넣어 두면 순서대로 이어진다.
+//
+// ★ 카메라(확대·이동)는 layout 계산 한 곳에만 들어간다 — 그리기·누른 자리 판정이 전부 layout을 거치므로
+//   확대해도 따로 손볼 곳이 없다.
+//
 // 이미지 파일 없이 도형과 색으로만 그린다. 차량은 '오른쪽을 보는 모습'으로 한 번만 그리고 회전시킨다.
 
 import { EXITED, vehicleCells } from '../core/rules.js';
 
 const COLORS = {
   plate: '#262a33',
-  plateEdge: '#171a20',
   grid: 'rgba(255,255,255,0.055)',
   exitDash: 'rgba(255,197,51,0.5)',
-  concrete: '#8d929c',
   concreteDark: '#5f646d',
   hazardA: '#ffc533',
   hazardB: '#24262b',
@@ -27,13 +31,24 @@ const COLORS = {
   taillight: '#ff4f56',
   select: '#ffffff',
   danger: '#ff5a5f',
+  // 하드 모드 구역
+  changeZone: '#30282b',
+  safeZone: '#183a35',
+  safeEdge: 'rgba(95,211,180,0.75)',
+  // 강조
+  random: '#ff9f43',
+  spawn: '#4dd4ff',
 };
 
+export const HIGHLIGHT = Object.freeze({ RANDOM: COLORS.random, SPAWN: COLORS.spawn });
+
 const MARGIN_CELLS = 0.35;         // 판 바깥 여백 (출구 점선·그림자가 보일 자리 — 넓히면 휴대폰에서 칸이 작아진다)
+const MAX_CELL_PX = 52;            // 확대 상한 — 칸 하나가 이 크기가 될 때까지 (작은 판은 처음부터 이보다 커서 확대가 없다)
 const ANGLE = { right: 0, down: Math.PI / 2, left: Math.PI, up: -Math.PI / 2 };
 
 const easeOutCubic = (t) => 1 - (1 - t) ** 3;
 const easeInOutQuad = (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+const easeOutBack = (t) => 1 + 2.2 * (t - 1) ** 3 + 1.2 * (t - 1) ** 2;
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
 
 export class BoardRenderer {
@@ -49,11 +64,13 @@ export class BoardRenderer {
     this.puzzle = null;
     this.pos = [];
     this.vis = [];
+    this.zone = null;           // 하드 모드 구역 { lo, hi, safeSize } — 없으면 일반 판
     this.selected = -1;
     this.hover = null;          // { vehicle, sign }
-    this.flashes = [];          // 막은 칸 깜빡임 { cells, until }
+    this.flashes = [];          // 막은 칸 깜빡임
     this.raf = 0;
-    this.layout = { cs: 0, ox: 0, oy: 0, w: 0, h: 0 };
+    this.view = { zoom: 1, panX: 0, panY: 0 };
+    this.layout = { cs: 0, cs0: 0, ox: 0, oy: 0, w: 0, h: 0 };
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(canvas.parentElement);
@@ -67,11 +84,13 @@ export class BoardRenderer {
 
   // ── 상태 ──────────────────────────────────────────────
 
-  setPuzzle(puzzle, pos) {
+  setPuzzle(puzzle, pos, { zone = null } = {}) {
     this.puzzle = puzzle;
+    this.zone = zone;
     this.selected = -1;
     this.hover = null;
     this.flashes = [];
+    this.view = { zoom: 1, panX: 0, panY: 0 };
     this.snapTo(pos);
     this.resize();
   }
@@ -79,12 +98,13 @@ export class BoardRenderer {
   /** 애니메이션 없이 위치를 맞춘다 (재시작) */
   snapTo(pos) {
     this.pos = pos.slice();
-    this.vis = pos.map((p) => ({ p: p === EXITED ? 0 : p, alpha: p === EXITED ? 0 : 1, anim: null, shake: null }));
+    this.vis = pos.map((p) => newVis(p));
     this.requestDraw();
   }
 
   setSelected(i) {
     this.selected = i;
+    if (i >= 0) this.ensureVisible(i);
     this.requestDraw();
   }
 
@@ -95,22 +115,80 @@ export class BoardRenderer {
     this.requestDraw();
   }
 
-  /** 엔진이 둔 이동을 그린다 */
+  /** 엔진이 둔 이동을 그린다 (지금 바로 시작 — 그 차가 하던 애니메이션은 끊고 이어 간다) */
   animateMove(move, pos) {
     this.pos = pos.slice();
-    const v = this.puzzle.vehicles[move.vehicle];
-    const vis = this.vis[move.vehicle];
     const now = performance.now();
     const from = this.visualPos(move.vehicle, now);
-    if (move.exits) {
-      // 판 끝을 지나 몸길이만큼 더 나가며 사라진다
-      const to = move.sign > 0 ? this.puzzle.size + 0.6 : -v.len - 0.6;
-      const dist = Math.abs(to - from);
-      vis.anim = { kind: 'exit', from, to, t0: now, dur: Math.min(900, 160 + dist * 60) };
-    } else {
-      vis.anim = { kind: 'move', from, to: move.to, t0: now, dur: Math.min(520, 110 + move.dist * 55) };
-    }
+    const vis = this.vis[move.vehicle];
+    vis.anims = [];
     vis.shake = null;
+    if (move.exits) {
+      vis.anims.push(this.exitAnim(move.vehicle, move.sign, from, now));
+    } else {
+      vis.anims.push({ kind: 'move', from, to: move.to, t0: now, dur: slideMs(move.to - from) });
+    }
+    this.requestDraw();
+  }
+
+  /**
+   * 차례를 기다리는 미끄러짐을 줄 끝에 붙인다 (하드 모드의 랜덤 이동).
+   * @param opts.delay 지금부터 몇 ms 뒤에 시작하는가, opts.dur 걸리는 시간, opts.highlight 강조 색
+   * @returns 이 애니메이션이 끝나는 시각까지 남은 ms
+   */
+  queueSlide(i, from, to, { delay = 0, dur, highlight = null } = {}) {
+    const now = performance.now();
+    const vis = this.vis[i];
+    const last = vis.anims[vis.anims.length - 1];
+    const t0 = Math.max(now + delay, last ? last.t0 + last.dur : 0);
+    const d = dur ?? slideMs(to - from);
+    vis.anims.push({ kind: 'move', from, to, t0, dur: d });
+    if (highlight) vis.highlight = { color: highlight, t0, until: t0 + d + 900 };
+    this.requestDraw();
+    return t0 + d - now;
+  }
+
+  /**
+   * 판이 바뀌었다 (차량이 늘거나 줄었다 — 하드 모드의 새 차량·되돌리기).
+   * 새로 생긴 차는 delay 뒤에 커지며 나타나고, 사라진 차는 지운다. 위치가 달라진 차는 그 자리로 미끄러진다.
+   * @param opts.spawnDelay 새 차가 나타나기까지 ms, opts.animate false면 위치 차이는 바로 맞춘다
+   */
+  updatePuzzle(puzzle, pos, { spawnDelay = 0, animate = true } = {}) {
+    const now = performance.now();
+    const old = this.pos;
+    this.puzzle = puzzle;
+    this.vis.length = Math.min(this.vis.length, puzzle.vehicles.length);
+    for (let i = 0; i < puzzle.vehicles.length; i++) {
+      const p = pos[i];
+      if (i >= this.vis.length) {
+        const vis = newVis(p);
+        vis.alpha = 0;
+        if (p !== EXITED) {
+          vis.anims.push({ kind: 'spawn', from: p, to: p, t0: now + spawnDelay, dur: 420 });
+          vis.highlight = { color: COLORS.spawn, t0: now + spawnDelay, until: now + spawnDelay + 1600 };
+        }
+        this.vis[i] = vis;
+        continue;
+      }
+      if (old[i] === p) continue;
+      const vis = this.vis[i];
+      if (!animate) {
+        this.vis[i] = newVis(p);
+      } else if (p === EXITED) {
+        vis.anims = [this.exitAnim(i, this.nearestEdgeSign(i, old[i]), this.visualPos(i, now), now)];
+      } else if (old[i] === EXITED || vis.alpha === 0) {
+        // 나갔던 차가 돌아온다 (되돌리기) — 가까운 가장자리 밖에서 들어온다
+        const v = puzzle.vehicles[i];
+        const sign = this.nearestEdgeSign(i, p);
+        const from = sign > 0 ? puzzle.size + 0.6 : -v.len - 0.6;
+        vis.alpha = 1;
+        vis.anims = [{ kind: 'enter', from, to: p, t0: now, dur: Math.min(700, 140 + Math.abs(p - from) * 50) }];
+      } else {
+        const from = this.visualPos(i, now);
+        vis.anims = [{ kind: 'move', from, to: p, t0: now, dur: slideMs(p - from) }];
+      }
+    }
+    this.pos = pos.slice();
     this.requestDraw();
   }
 
@@ -121,11 +199,11 @@ export class BoardRenderer {
     const vis = this.vis[move.vehicle];
     const now = performance.now();
     let from = this.visualPos(move.vehicle, now);
-    if (move.exits && vis.alpha === 0 && !vis.anim) {
+    if (move.exits && vis.alpha === 0 && vis.anims.length === 0) {
       from = move.sign > 0 ? this.puzzle.size + 0.6 : -v.len - 0.6;   // 이미 다 나간 차 — 판 밖에서 들어온다
     }
     const dist = Math.abs(move.from - from);
-    vis.anim = { kind: move.exits ? 'enter' : 'move', from, to: move.from, t0: now, dur: Math.min(700, 140 + dist * 50) };
+    vis.anims = [{ kind: move.exits ? 'enter' : 'move', from, to: move.from, t0: now, dur: Math.min(700, 140 + dist * 50) }];
     vis.alpha = 1;
     this.requestDraw();
   }
@@ -143,17 +221,41 @@ export class BoardRenderer {
     this.requestDraw();
   }
 
-  /** 진행 중인 애니메이션이 끝날 때까지 남은 시간(ms) */
+  /** 기다리는 애니메이션을 전부 끝낸 모습으로 건너뛴다 (애니메이션 도중에 다음 수를 둘 때) */
+  finishAnimations() {
+    for (const vis of this.vis) {
+      if (vis.anims.length === 0) continue;
+      const last = vis.anims[vis.anims.length - 1];
+      vis.p = last.to;
+      vis.alpha = last.kind === 'exit' ? 0 : 1;
+      vis.anims = [];
+    }
+    this.requestDraw();
+  }
+
+  /** 진행 중이거나 기다리는 애니메이션이 끝날 때까지 남은 시간(ms) */
   remainingAnimationMs() {
     const now = performance.now();
     let ms = 0;
     for (const v of this.vis) {
-      if (v.anim) ms = Math.max(ms, v.anim.t0 + v.anim.dur - now);
+      const last = v.anims[v.anims.length - 1];
+      if (last) ms = Math.max(ms, last.t0 + last.dur - now);
     }
     return Math.max(0, ms);
   }
 
-  // ── 좌표 ──────────────────────────────────────────────
+  exitAnim(i, sign, from, now) {
+    const v = this.puzzle.vehicles[i];
+    const to = sign > 0 ? this.puzzle.size + 0.6 : -v.len - 0.6;   // 판 끝을 지나 몸길이만큼 더 나가며 사라진다
+    return { kind: 'exit', from, to, t0: now, dur: Math.min(900, 160 + Math.abs(to - from) * 60) };
+  }
+
+  nearestEdgeSign(i, p) {
+    const v = this.puzzle.vehicles[i];
+    return p + v.len / 2 > this.puzzle.size / 2 ? 1 : -1;
+  }
+
+  // ── 좌표 · 카메라 ─────────────────────────────────────
 
   resize() {
     const parent = this.canvas.parentElement;
@@ -166,11 +268,75 @@ export class BoardRenderer {
     this.canvas.width = Math.round(w * dpr);
     this.canvas.height = Math.round(h * dpr);
     this.dpr = dpr;
+    this.layout.w = w;
+    this.layout.h = h;
+    this.applyView();
+  }
 
+  /** 확대 배율·이동을 받아 layout을 다시 잡는다. 판이 화면보다 크면 판 밖 빈 곳이 보이지 않게 이동을 자른다 */
+  applyView() {
+    const { w, h } = this.layout;
     const n = this.puzzle?.size ?? 6;
-    const cs = Math.min(w, h) / (n + MARGIN_CELLS * 2);
-    this.layout = { cs, ox: (w - n * cs) / 2, oy: (h - n * cs) / 2, w, h };
+    const cs0 = Math.min(w, h) / (n + MARGIN_CELLS * 2);
+    const zoom = Math.min(Math.max(1, this.view.zoom), this.maxZoom(cs0));
+    const cs = cs0 * zoom;
+    const size = n * cs;
+    const m = MARGIN_CELLS * cs0;
+    const clampAxis = (pan, span) => {
+      if (size + 2 * m <= span) return 0;              // 다 보인다 — 가운데 고정
+      const limit = (size + 2 * m - span) / 2;
+      return Math.max(-limit, Math.min(limit, pan));
+    };
+    this.view = { zoom, panX: clampAxis(this.view.panX, w), panY: clampAxis(this.view.panY, h) };
+    this.layout = { w, h, cs0, cs, ox: (w - size) / 2 + this.view.panX, oy: (h - size) / 2 + this.view.panY };
     this.requestDraw();
+  }
+
+  maxZoom(cs0 = this.layout.cs0) {
+    return cs0 > 0 ? Math.max(1, MAX_CELL_PX / cs0) : 1;
+  }
+
+  get canZoom() {
+    return this.maxZoom() > 1.01;
+  }
+
+  /** (px, py) 아래의 판 위 지점을 그대로 둔 채 배율을 factor배 한다 */
+  zoomAt(factor, px, py) {
+    const before = this.toBoard(px, py);
+    this.view.zoom *= factor;
+    this.applyView();
+    const { cs, ox, oy } = this.layout;
+    this.view.panX += px - (ox + before.x * cs);
+    this.view.panY += py - (oy + before.y * cs);
+    this.applyView();
+  }
+
+  panBy(dx, dy) {
+    this.view.panX += dx;
+    this.view.panY += dy;
+    this.applyView();
+  }
+
+  resetView() {
+    this.view = { zoom: 1, panX: 0, panY: 0 };
+    this.applyView();
+  }
+
+  /** 확대한 상태에서 i번 차량이 화면 밖이면 보이도록 옮긴다 (키보드로 고를 때) */
+  ensureVisible(i) {
+    if (!this.puzzle || this.view.zoom <= 1.01 || this.pos[i] === EXITED) return;
+    const c = this.vehicleCenter(i);
+    const { cs, ox, oy, w, h } = this.layout;
+    const x = ox + c.x * cs;
+    const y = oy + c.y * cs;
+    const pad = cs * 2;
+    let dx = 0;
+    let dy = 0;
+    if (x < pad) dx = pad - x;
+    else if (x > w - pad) dx = w - pad - x;
+    if (y < pad) dy = pad - y;
+    else if (y > h - pad) dy = h - pad - y;
+    if (dx || dy) this.panBy(dx, dy);
   }
 
   /** 화면 좌표(캔버스 기준 CSS px) → 칸 좌표 (실수) */
@@ -204,7 +370,7 @@ export class BoardRenderer {
     return null;
   }
 
-  /** i번 차량의 화면상 중심 (CSS px) — 키보드 선택 이동에 쓴다 */
+  /** i번 차량의 중심 (칸 좌표) — 키보드 선택 이동에 쓴다 */
   vehicleCenter(i) {
     const v = this.puzzle.vehicles[i];
     const p = this.pos[i];
@@ -214,11 +380,17 @@ export class BoardRenderer {
 
   visualPos(i, now) {
     const vis = this.vis[i];
-    const a = vis.anim;
-    if (!a) return vis.p;
-    const t = clamp01((now - a.t0) / a.dur);
-    const e = a.kind === 'exit' ? easeInOutQuad(t) : easeOutCubic(t);
-    return a.from + (a.to - a.from) * e;
+    let p = vis.p;
+    for (const a of vis.anims) {
+      if (now < a.t0) return a.from;
+      if (now < a.t0 + a.dur) {
+        const t = clamp01((now - a.t0) / a.dur);
+        const e = a.kind === 'exit' ? easeInOutQuad(t) : easeOutCubic(t);
+        return a.from + (a.to - a.from) * e;
+      }
+      p = a.to;
+    }
+    return p;
   }
 
   // ── 그리기 ────────────────────────────────────────────
@@ -245,8 +417,8 @@ export class BoardRenderer {
 
     let busy = false;
     // 나가는 차를 맨 위에 — 판 가장자리 너머로 미끄러질 때 다른 차 밑으로 들어가 보이지 않게
-    const order = this.puzzle.vehicles.map((_, i) => i)
-      .sort((a, b) => (this.vis[a].anim?.kind === 'exit') - (this.vis[b].anim?.kind === 'exit'));
+    const exiting = (i) => this.vis[i].anims.some((a) => a.kind === 'exit');
+    const order = this.puzzle.vehicles.map((_, i) => i).sort((a, b) => exiting(a) - exiting(b));
     for (const i of order) busy = this.drawVehicleAt(i, now) || busy;
 
     busy = this.drawFlashes(now) || busy;
@@ -258,15 +430,15 @@ export class BoardRenderer {
     const { cs, ox, oy } = this.layout;
     const n = this.puzzle.size;
     const size = n * cs;
-    const r = cs * 0.3;
+    const r = cs * (this.zone ? 0.6 : 0.3);
 
-    // 판 그림자 + 바탕
+    // 판 그림자 + 바탕 (하드 모드는 바탕 전체가 변화구역 색)
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.45)';
     ctx.shadowBlur = cs * 0.6;
     ctx.shadowOffsetY = cs * 0.15;
     roundRect(ctx, ox, oy, size, size, r);
-    ctx.fillStyle = COLORS.plate;
+    ctx.fillStyle = this.zone ? COLORS.changeZone : COLORS.plate;
     ctx.fill();
     ctx.restore();
 
@@ -277,6 +449,8 @@ export class BoardRenderer {
     roundRect(ctx, ox, oy, size, size, r);
     ctx.fillStyle = g;
     ctx.fill();
+
+    if (this.zone) this.drawSafeZone();
 
     // 주차 칸 선
     ctx.save();
@@ -302,6 +476,25 @@ export class BoardRenderer {
     ctx.strokeStyle = COLORS.exitDash;
     roundRect(ctx, ox + inset, oy + inset, size - inset * 2, size - inset * 2, r - inset);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  /** 하드 모드 — 정중앙 안전구역을 청록으로 칠하고 점선으로 두른다 */
+  drawSafeZone() {
+    const { ctx } = this;
+    const { cs, ox, oy } = this.layout;
+    const z = this.zone;
+    if (!z.safeSize) return;
+    const x = ox + z.lo * cs;
+    const y = oy + z.lo * cs;
+    const s = z.safeSize * cs;
+    ctx.save();
+    ctx.fillStyle = COLORS.safeZone;
+    ctx.fillRect(x, y, s, s);
+    ctx.setLineDash([cs * 0.3, cs * 0.2]);
+    ctx.lineWidth = Math.max(1.5, cs * 0.08);
+    ctx.strokeStyle = COLORS.safeEdge;
+    ctx.strokeRect(x, y, s, s);
     ctx.restore();
   }
 
@@ -354,20 +547,31 @@ export class BoardRenderer {
     const v = this.puzzle.vehicles[i];
     let busy = false;
 
+    // 끝난 애니메이션을 줄에서 걷어 내고 결과를 굳힌다
+    while (vis.anims.length && now >= vis.anims[0].t0 + vis.anims[0].dur) {
+      const a = vis.anims.shift();
+      vis.p = a.to;
+      vis.alpha = a.kind === 'exit' ? 0 : 1;
+    }
+
     let p = vis.p;
     let alpha = vis.alpha;
-    if (vis.anim) {
-      const a = vis.anim;
-      const t = clamp01((now - a.t0) / a.dur);
-      p = this.visualPos(i, now);
-      if (a.kind === 'exit') alpha = 1 - clamp01((t - 0.45) / 0.55);
-      else if (a.kind === 'enter') alpha = clamp01(t / 0.4);
-      if (t >= 1) {
-        vis.p = a.to;
-        vis.alpha = a.kind === 'exit' ? 0 : 1;
-        vis.anim = null;
+    let scale = 1;
+    const a = vis.anims[0];
+    if (a) {
+      busy = true;
+      if (now < a.t0) {
+        p = a.from;
+        if (a.kind === 'spawn' || a.kind === 'enter') alpha = 0;
       } else {
-        busy = true;
+        const t = clamp01((now - a.t0) / a.dur);
+        p = this.visualPos(i, now);
+        if (a.kind === 'exit') alpha = 1 - clamp01((t - 0.45) / 0.55);
+        else if (a.kind === 'enter') alpha = clamp01(t / 0.4);
+        else if (a.kind === 'spawn') {
+          alpha = clamp01(t / 0.35);
+          scale = 0.55 + 0.45 * easeOutBack(t);
+        } else alpha = 1;
       }
     }
 
@@ -393,10 +597,32 @@ export class BoardRenderer {
     ctx.globalAlpha = alpha;
     ctx.translate(x + wPx / 2, y + hPx / 2);
     ctx.rotate(ANGLE[v.frontDir]);
+    if (scale !== 1) ctx.scale(scale, scale);
 
     const L = v.len * cs;
     const W = cs;
-    const exiting = vis.anim?.kind === 'exit';
+    const exiting = a?.kind === 'exit' && now >= a.t0;
+
+    // 강조 (랜덤 이동·새 차량) — 차 밑에 번지는 빛 + 테두리
+    const hl = vis.highlight;
+    if (hl && now >= hl.t0) {
+      if (now >= hl.until) {
+        vis.highlight = null;
+      } else {
+        busy = true;
+        const fade = clamp01((hl.until - now) / 400);
+        ctx.save();
+        ctx.globalAlpha = alpha * fade;
+        ctx.shadowColor = hl.color;
+        ctx.shadowBlur = cs * 0.6;
+        ctx.lineWidth = Math.max(2, cs * 0.1);
+        ctx.strokeStyle = hl.color;
+        roundRect(ctx, -L / 2 + cs * 0.03, -W / 2 + cs * 0.03, L - cs * 0.06, W - cs * 0.06, cs * 0.24);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
     if (exiting) drawSpeedLines(ctx, L, W, cs);
     if (v.kind === 'bus') drawBus(ctx, L, W, cs);
     else drawCar(ctx, L, W, cs, COLORS.cars[i % COLORS.cars.length]);
@@ -416,7 +642,7 @@ export class BoardRenderer {
     ctx.restore();
 
     // 마우스를 올린 쪽 — 그 방향 화살표 (회전 없이 판 좌표로)
-    if (this.hover?.vehicle === i && !vis.anim) {
+    if (this.hover?.vehicle === i && vis.anims.length === 0) {
       this.drawHoverArrow(v, p, this.hover.sign);
     }
     return busy;
@@ -465,6 +691,15 @@ export class BoardRenderer {
     }
     return this.flashes.length > 0;
   }
+}
+
+function newVis(p) {
+  return { p: p === EXITED ? 0 : p, alpha: p === EXITED ? 0 : 1, anims: [], shake: null, highlight: null };
+}
+
+/** 미끄러지는 시간 — 거리에 비례하되 상한을 둔다 */
+function slideMs(dist) {
+  return Math.min(520, 110 + Math.abs(dist) * 55);
 }
 
 // ── 차량 그림 (오른쪽을 보는 모습, 가운데가 원점) ─────────────────
