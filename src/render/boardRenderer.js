@@ -37,6 +37,7 @@ const COLORS = {
   safeEdge: 'rgba(95,211,180,0.75)',
   // 강조
   random: '#ff9f43',
+  block: '#ff3b5c',   // 길막기 — 플레이어가 뚫는 통로를 막으러 온 랜덤 이동 (주황 랜덤 이동과 갈리게)
   spawn: '#4dd4ff',
   // 리무진
   limo: '#16141c',
@@ -44,7 +45,7 @@ const COLORS = {
   limoGlass: '#3a4150',
 };
 
-export const HIGHLIGHT = Object.freeze({ RANDOM: COLORS.random, SPAWN: COLORS.spawn });
+export const HIGHLIGHT = Object.freeze({ RANDOM: COLORS.random, BLOCK: COLORS.block, SPAWN: COLORS.spawn });
 
 const MARGIN_CELLS = 0.35;         // 판 바깥 여백 (출구 점선·그림자가 보일 자리 — 넓히면 휴대폰에서 칸이 작아진다)
 const MAX_CELL_PX = 52;            // 확대 상한 — 칸 하나가 이 크기가 될 때까지 (작은 판은 처음부터 이보다 커서 확대가 없다)
@@ -137,17 +138,18 @@ export class BoardRenderer {
 
   /**
    * 차례를 기다리는 미끄러짐을 줄 끝에 붙인다 (하드 모드의 랜덤 이동).
-   * @param opts.delay 지금부터 몇 ms 뒤에 시작하는가, opts.dur 걸리는 시간, opts.highlight 강조 색
+   * @param opts.delay 지금부터 몇 ms 뒤에 시작하는가, opts.dur 걸리는 시간, opts.highlight 강조 색,
+   *   opts.hold 멈춘 뒤 강조를 얼마나 더 남겨 두는가
    * @returns 이 애니메이션이 끝나는 시각까지 남은 ms
    */
-  queueSlide(i, from, to, { delay = 0, dur, highlight = null } = {}) {
+  queueSlide(i, from, to, { delay = 0, dur, highlight = null, hold = 900 } = {}) {
     const now = performance.now();
     const vis = this.vis[i];
     const last = vis.anims[vis.anims.length - 1];
     const t0 = Math.max(now + delay, last ? last.t0 + last.dur : 0);
     const d = dur ?? slideMs(to - from);
     vis.anims.push({ kind: 'move', from, to, t0, dur: d });
-    if (highlight) vis.highlight = { color: highlight, t0, until: t0 + d + 900 };
+    if (highlight) vis.highlight = { color: highlight, t0, until: t0 + d + hold };
     this.requestDraw();
     return t0 + d - now;
   }

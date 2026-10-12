@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  HardSession, HardStatus, HardStuck, zoneLayout, isSafeCell, inChangeZone, randomMovable, spawnVehicle,
-  checkHardStuck, generateHardPuzzle, hardScore,
+  HardSession, HardStatus, HardStuck, zoneLayout, isSafeCell, inChangeZone, randomMovable, randomTravel, spawnVehicle,
+  checkHardStuck, generateHardPuzzle, hardScore, livePassages, estimateTarget, blockChance, runRandomPhase,
 } from '../src/core/hardMode.js';
 import { minLeaveSafeMoves } from '../src/core/hardSolver.js';
 import { HARD_GEN_DEFAULTS } from '../src/core/hardGenerator.js';
@@ -225,15 +225,31 @@ test('랜덤 이동: 매 턴 1~4대를 정하고, 움직일 차가 모자라면 
       assert.equal(new Set(moves.map((m) => m.vehicle)).size, moves.length, '같은 차를 두 번 고르지 않는다');
       for (const m of moves) assert.ok(m.dist >= 1, '고른 차는 실제로 움직인다');
       if (moves.length < k) {
-        // 모자랐다면, 그 턴의 랜덤 이동이 끝난 시점에 (이번 턴에 안 고른 차 중) 움직일 수 있는 차가 없어야 한다
+        // 모자랐다면, 그 턴의 랜덤 이동이 끝난 시점에 (이번 턴에 안 고른 차 중) 움직일 수 있는 차가 없어야 한다 —
+        // 있다면 그 차의 수는 모두 '리무진 통로를 완전히 비우는 수'여야 한다 (한 턴에 maxClears번까지라 막혔다)
         const afterRandom = applyPlayerAndRandom(before, r);
-        const left = randomMovable(before.puzzle, buildGrid(before.puzzle, afterRandom), s.zone, afterRandom, new Set(moves.map((m) => m.vehicle)));
-        assert.deepEqual(left, []);
+        const grid = buildGrid(before.puzzle, afterRandom);
+        const left = randomMovable(before.puzzle, grid, s.zone, afterRandom, new Set(moves.map((m) => m.vehicle)));
+        for (const i of left) {
+          for (const sign of [-1, 1]) {
+            const dist = randomTravel(before.puzzle, grid, s.zone, afterRandom, i, sign);
+            if (dist > 0) assert.ok(clearsPassage(before.puzzle, afterRandom, s.limoIds, i, afterRandom[i] + sign * dist), '남은 수는 통로를 비우는 수뿐');
+          }
+        }
       }
     });
   }
   assert.deepEqual([...requested].sort(), [1, 2, 3, 4], '1~4가 모두 나온다');
 });
+
+/** i번 차를 to로 옮기면 지금 막혀 있는 리무진 통로 하나가 완전히 비는가 */
+function clearsPassage(puzzle, pos, limoIds, i, to) {
+  const blocked = livePassages(puzzle, pos, limoIds).filter((ps) => ps.blockers.length > 0);
+  const next = pos.slice();
+  next[i] = to;
+  const after = livePassages(puzzle, next, limoIds);
+  return blocked.some((ps) => after.find((q) => q.limo === ps.limo && q.sign === ps.sign).blockers.length === 0);
+}
 
 /** 턴 시작 상태 + 결과로 '랜덤 이동 직후'(새 차 도착 전) 위치를 다시 만든다 */
 function applyPlayerAndRandom(before, r) {
@@ -324,6 +340,157 @@ test('랜덤 이동: 안전구역 차도 플레이어가 변화구역으로 완�
   assert.equal(pos[a], 1);
   assert.ok(inChangeZone(p, z, a, pos[a]));
   assert.ok(randomMovable(p, buildGrid(p, pos), z, pos).includes(a), '변화구역으로 나오면 대상이다');
+});
+
+// ── 길막기 ─────────────────────────────────────────────
+
+/** 길막기를 늘 하는 작은 판 설정 (한 턴에 랜덤 이동 1대) */
+const ALWAYS_BLOCK = { ...SMALL, randomMin: 1, randomMax: 1, blockMove: { chance: 1, cooldown: 0.5, maxClears: 1 } };
+
+// 9×9, 안전구역 (3~5). k: 가로 리무진(4행 3~4열). x는 왼쪽 통로, y는 오른쪽 통로를 막는다.
+// z는 맨 위에서 아래로 밀리면 (6,6) 구조물 앞(4~5행)에 멈춘다 — 오른쪽 통로의 (6,4)에 선다
+const BLOCK_BOARD = `
+  . . . . . . z . .
+  . . . . . . Z . .
+  . . . . . . . . .
+  . x . . . . . . .
+  . X . k K . . y .
+  . . . . . . . Y .
+  . . . . . . # . .
+  . . . . . . . . .
+  . . . . . . . . .
+`;
+
+test('길막기: 플레이어가 뚫는 통로 추정 — 방금 막는 차가 줄어든 통로, 없으면 막는 차가 가장 적은 통로', () => {
+  const p = limoBoard(BLOCK_BOARD, ['k']);
+  const k = idOf(p, 'k');
+  const y = idOf(p, 'y');
+  // y를 아래로 빼면 오른쪽 통로의 막는 차가 1 → 0
+  const after = applyMove(p.start, getMove(p, p.start, y, 1));
+  const t = estimateTarget(p, p.start, after, [k]);
+  assert.equal(t.limo, k);
+  assert.equal(t.sign, 1);
+  // 막는 차가 줄어든 통로가 없으면(위치 그대로) → 막는 차가 가장 적은 통로
+  const same = estimateTarget(p, p.start, p.start, [k]);
+  assert.equal(same.blockers.length, 1, '두 통로 모두 1대 — 먼저 나온 통로(왼쪽)');
+  assert.equal(same.sign, -1);
+});
+
+test('길막기: 확률이 맞으면 랜덤 이동 한 대가 그 통로로 들어온다 — 빨간 강조용 표시(blocking)와 상태(lastBlock)가 남는다', () => {
+  const p = limoBoard(BLOCK_BOARD, ['k']);
+  const s = new HardSession(p, 'block', ALWAYS_BLOCK);
+  const r = s.move(idOf(p, 'y'), 1);
+  assert.equal(r.random.blocked, true);
+  assert.equal(r.random.moves.length, 1);
+  const m = r.random.moves[0];
+  assert.equal(m.vehicle, idOf(p, 'z'));
+  assert.equal(m.blocking, true);
+  assert.ok(vehicleCells(p, m.vehicle, m.to).some((c) => c.x === 6 && c.y === 4), '오른쪽 통로 (6,4)에 선다');
+  assert.equal(s.state.lastBlock, true);
+  // 되돌리면 길막기 기록도 함께 돌아간다
+  s.undo();
+  assert.equal(s.state.lastBlock, false);
+  const again = s.move(idOf(p, 'y'), 1);
+  assert.deepEqual(again.random.moves, r.random.moves, '같은 수 → 같은 길막기');
+});
+
+test('길막기: 통로가 활짝 열려 있으면 리무진 바로 앞 칸은 막지 않는다', () => {
+  // k: 가로 리무진(4행 4~5열) — 앞(오른쪽) 칸 (6,4)이 바로 변화구역. 오른쪽 통로는 비어 있고 왼쪽은 x가 막는다.
+  // z는 (6,4)로, w는 (8,4)로 들어올 수 있다 — 리무진 코앞인 z가 아니라 w가 막으러 온다
+  const text = (withW) => `
+    . . . . . . z . ${withW ? 'w' : '.'}
+    . . . . . . Z . ${withW ? 'W' : '.'}
+    . . . . . . . . .
+    . x . . . . . . .
+    . X . . k K . . .
+    . . . . . . . . .
+    . . . . . . # . #
+    . . . . . . . . .
+    q Q . . . . . . .
+  `;
+  const p = limoBoard(text(true), ['k']);
+  const s = new HardSession(p, 'front', ALWAYS_BLOCK);
+  const r = s.move(idOf(p, 'q'), 1);   // 통로와 상관없는 수 → 목표는 막는 차가 가장 적은 오른쪽 통로(0대)
+  assert.equal(r.random.target.sign, 1);
+  assert.equal(r.random.blocked, true);
+  assert.equal(r.random.moves[0].vehicle, idOf(p, 'w'));
+
+  // w가 없으면 길막기를 하지 않는다 (z가 아무렇게나 골려 그 자리에 갈 수는 있어도 길막기는 아니다)
+  const p2 = limoBoard(text(false), ['k']);
+  for (let t = 0; t < 10; t++) {
+    const s2 = new HardSession(p2, `front-${t}`, ALWAYS_BLOCK);
+    const r2 = s2.move(idOf(p2, 'q'), 1);
+    assert.equal(r2.random.blocked, false);
+    assert.ok(r2.random.moves.every((m) => !m.blocking));
+  }
+});
+
+test('길막기: 바로 앞 턴에 길막기를 했으면 확률이 절반', () => {
+  const bm = HARD_MODE.blockMove;
+  assert.equal(blockChance(bm, false), bm.chance);
+  assert.equal(blockChance(bm, true), bm.chance * bm.cooldown);
+  assert.equal(bm.chance, 0.35);
+  // 실제 랜덤 이동에서도 — 확률 1에 직전 길막기가 있으면 절반쯤만 막는다
+  const p = limoBoard(BLOCK_BOARD, ['k']);
+  const k = idOf(p, 'k');
+  const after = applyMove(p.start, getMove(p, p.start, idOf(p, 'y'), 1));
+  const target = estimateTarget(p, p.start, after, [k]);
+  const zone = zoneLayout(9, 3);
+  let blocked = 0;
+  for (let t = 0; t < 400; t++) {
+    const r = runRandomPhase(p, zone, after.slice(), createRng(`cool-${t}`), ALWAYS_BLOCK, { limoIds: [k], target, lastBlock: true });
+    if (r.blocked) blocked++;
+  }
+  assert.ok(blocked > 400 * 0.4 && blocked < 400 * 0.6, `직전 길막기 뒤 ${blocked}/400`);
+});
+
+test('길막기: 랜덤 이동이 리무진 통로를 완전히 비우는 것은 한 턴에 한 번까지', () => {
+  // a는 왼쪽 통로, b는 오른쪽 통로를 혼자 막는다 — 둘 다 위아래로 비킬 수 있다. 랜덤 이동 2대를 해도 통로는 하나만 열린다
+  const p = limoBoard(`
+    . . . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .
+    . a . k K . . b .
+    . A . . . . . B .
+    . . . . . . . . .
+    . . . . . . . . .
+    q Q . . . . . . .
+  `, ['k']);
+  const k = idOf(p, 'k');
+  const config = { ...SMALL, randomMin: 2, randomMax: 2, blockMove: { chance: 0, cooldown: 0.5, maxClears: 1 } };
+  let opened = 0;
+  for (let t = 0; t < 30; t++) {
+    const s = new HardSession(p, `clear-${t}`, config);
+    const before = s.state;
+    const r = s.move(idOf(p, 'q'), 1);
+    const afterPlayer = applyMove(before.pos, r.move);
+    const passagesBefore = livePassages(p, afterPlayer, [k]);
+    const passagesAfter = livePassages(p, applyPlayerAndRandom(before, r), [k]);
+    const newlyOpen = passagesAfter.filter((ps, n) => ps.blockers.length === 0 && passagesBefore[n].blockers.length > 0);
+    assert.ok(newlyOpen.length <= 1, `시도 ${t}: 통로 ${newlyOpen.length}개가 한꺼번에 열렸다`);
+    opened += newlyOpen.length;
+  }
+  assert.ok(opened > 0, '한 개는 열릴 수 있다');
+});
+
+test('길막기: 실제 판에서 — 한 턴에 많아야 한 대, 길막기 이동은 목표 통로 칸에 선다', () => {
+  let seen = 0;
+  for (const { seed, puzzle } of hardBoards) {
+    const s = new HardSession(puzzle, seed);
+    playRandomly(s, 150, seed, (r, before) => {
+      if (!r?.moved || r.cleared) return;
+      const blocking = r.random.moves.filter((m) => m.blocking);
+      assert.ok(blocking.length <= 1);
+      assert.equal(r.random.blocked, blocking.length === 1);
+      for (const m of blocking) {
+        const cells = vehicleCells(before.puzzle, m.vehicle, m.to).map((c) => c.y * before.puzzle.size + c.x);
+        assert.ok(cells.some((c) => r.random.target.cells.includes(c)));
+        seen++;
+      }
+    });
+  }
+  assert.ok(seen > 0, '실제 판에서도 길막기가 일어난다');
 });
 
 // ── 새 차량 ─────────────────────────────────────────────

@@ -1,6 +1,7 @@
 // 하드 모드 규칙 — 일반 규칙(미끄러지기·탈출)에 두 가지를 더한다. 화면과 무관한 순수 로직.
 //
 //   1) 변화구역의 랜덤 이동 — 플레이어가 차를 실제로 움직일 때마다, 그 직후 변화구역의 차 1~4대가 저절로 움직인다
+//      그중 한 대는 가끔(blockMove.chance) 플레이어가 뚫고 있는 리무진 통로를 막으러 온다 ('길막기')
 //   2) 새 차량 도착 — 차가 판 밖으로 나가면 카운트다운(3턴)이 시작되고, 끝나면 변화구역에 차 한 대가 새로 놓인다
 //
 // 구역: 정중앙 safeSize×safeSize가 안전구역, 나머지 전부가 변화구역 (25 = 9 + 7 + 9).
@@ -11,7 +12,7 @@
 //   리무진을 모두 판 밖으로 빼면 클리어다. 일반 차는 남아 있어도 된다. 리무진의 탈출도 탈출이라 카운트다운을 시작시킨다.
 //   리무진이 없는 판(테스트의 작은 판)은 예전처럼 모든 차를 빼야 클리어다.
 //
-// ★ 난수 상태(숫자 4개)도 게임 상태에 들어 있다. 되돌리기는 상태 통째로 되돌리므로
+// ★ 난수 상태(숫자 4개)와 '바로 앞 턴에 길막기를 했는가'도 게임 상태에 들어 있다. 되돌리기는 상태 통째로 되돌리므로
 //   같은 수를 다시 두면 같은 랜덤 결과가 나온다.
 //
 // ★ 한 턴의 순서 (시간 순서가 곧 규칙이다)
@@ -27,6 +28,7 @@ import {
   EXITED, EMPTY, BLOCK, OFF_BOARD, VEHICLE_LENGTH, buildGrid, travel, getMove, applyMove, remainingCount, withVehicle,
 } from './rules.js';
 import { generateHardBoard } from './hardGenerator.js';
+import { passageInfo } from './hardSolver.js';
 import { HARD_MODE } from './levels.js';
 
 export const HardStatus = Object.freeze({
@@ -101,35 +103,162 @@ function setCells(puzzle, grid, i, p, value) {
   }
 }
 
+// ── 길막기 ─────────────────────────────────────────────
+//   ★ 플레이어가 뚫고 있는 통로를 추정해, 랜덤 이동 한 대가 가끔 그 통로로 들어온다. 그래야 '통로 하나를 미리 다 비워 두고
+//     리무진을 뺀다'가 공짜가 아니다. 대신 너무 심술궂지 않게: 한 턴에 한 대, 바로 앞 턴에 막았으면 확률 절반,
+//     통로가 활짝 열려 있을 때 리무진 코앞은 막지 않는다.
+//   ★ 반대 방향 장치 — 랜덤 이동이 통로를 '완전히' 비워 주는 것도 한 턴에 maxClears번까지 (공짜로 길이 열리지 않게)
+
+/** 남은 리무진들의 통로 — 구조물이 있어 영영 못 쓰는 통로는 뺀다. [{ limo, sign, cells, blockers }] (리무진 번호 순, 뒤(−) 먼저) */
+export function livePassages(puzzle, pos, limoIds, grid = buildGrid(puzzle, pos)) {
+  const out = [];
+  for (const l of limoIds) {
+    if (pos[l] === EXITED) continue;
+    for (const ps of passageInfo(puzzle, pos, grid, l)) if (!ps.dead) out.push(ps);
+  }
+  return out;
+}
+
+/**
+ * 플레이어가 뚫고 있는 통로 추정 — 방금 둔 수로 막는 차가 줄어든 통로(여럿이면 남은 차가 적은 쪽),
+ * 그런 통로가 없으면 막는 차가 가장 적은 통로. 같으면 먼저 나온 통로 (난수를 쓰지 않는다).
+ * @param before 플레이어가 두기 전 위치, after 둔 뒤 위치 (랜덤 이동 전)
+ * @returns 통로 하나 | null (남은 리무진이 없거나 쓸 수 있는 통로가 없다)
+ */
+export function estimateTarget(puzzle, before, after, limoIds) {
+  const prev = livePassages(puzzle, before, limoIds);
+  const cur = livePassages(puzzle, after, limoIds);
+  if (cur.length === 0) return null;
+  const countBefore = (ps) => prev.find((q) => q.limo === ps.limo && q.sign === ps.sign)?.blockers.length;
+  const decreased = cur.filter((ps) => {
+    const b = countBefore(ps);
+    return b !== undefined && ps.blockers.length < b;
+  });
+  const pool = decreased.length > 0 ? decreased : cur;
+  return pool.reduce((best, ps) => (ps.blockers.length < best.blockers.length ? ps : best));
+}
+
+/** 이번 턴에 길막기를 할 확률 — 바로 앞 턴에 했으면 cooldown을 곱한다 */
+export function blockChance(blockMove, lastBlock) {
+  if (!blockMove) return 0;
+  return blockMove.chance * (lastBlock ? blockMove.cooldown : 1);
+}
+
+/** 판(grid)에서 이 칸들을 막고 있는 서로 다른 차 수 */
+function occupantCount(grid, cells) {
+  const seen = new Set();
+  for (const k of cells) if (grid[k] > 0) seen.add(grid[k]);
+  return seen.size;
+}
+
+/** 지금 랜덤으로 둘 수 있는 수 — [{ vehicle, sign, dist }] (차 번호 순, 뒤(−) 먼저) */
+function randomOptions(puzzle, grid, zone, pos, exclude) {
+  const out = [];
+  for (const i of randomMovable(puzzle, grid, zone, pos, exclude)) {
+    for (const sign of [-1, 1]) {
+      const dist = randomTravel(puzzle, grid, zone, pos, i, sign);
+      if (dist > 0) out.push({ vehicle: i, sign, dist });
+    }
+  }
+  return out;
+}
+
+/** 수 하나를 판에 잠깐 두고 fn을 재 본다 (판은 원래대로 돌려 놓는다) */
+function withMove(puzzle, grid, pos, o, fn) {
+  const from = pos[o.vehicle];
+  const to = from + o.sign * o.dist;
+  setCells(puzzle, grid, o.vehicle, from, EMPTY);
+  setCells(puzzle, grid, o.vehicle, to, o.vehicle + 1);
+  const r = fn(to);
+  setCells(puzzle, grid, o.vehicle, to, EMPTY);
+  setCells(puzzle, grid, o.vehicle, from, o.vehicle + 1);
+  return r;
+}
+
+function cellsAt(puzzle, i, p) {
+  const v = puzzle.vehicles[i];
+  const N = puzzle.size;
+  const out = [];
+  for (let k = 0; k < v.len; k++) {
+    const [x, y] = cellXY(v, p + k);
+    out.push(y * N + x);
+  }
+  return out;
+}
+
 /**
  * 한 턴의 랜덤 이동. pos를 직접 바꾼다 (복사본을 넘길 것).
  * 대수를 먼저 정하고(randomMin~randomMax), 한 대씩 차례로 고른다 — 앞 차가 움직이면 뒤 차가 움직일 수 있는지가
  * 달라지므로 후보는 매번 다시 센다. 같은 차는 한 턴에 두 번 고르지 않는다.
  * 고른 차는 '실제로 움직이는 방향' 중에서 무작위로 방향을 정한다 (한쪽만 트였으면 그쪽).
- * @returns { requested, moves: [{ vehicle, sign, from, to, dist }] }
+ * @param ctx { limoIds, target, lastBlock } — 길막기용 (없으면 길막기·통로 비우기 제한 없이 예전 그대로)
+ *   target: estimateTarget의 통로, lastBlock: 바로 앞 턴에 길막기를 했는가
+ * @returns { requested, moves: [{ vehicle, sign, from, to, dist, blocking }], blocked: 길막기를 했는가, target }
  */
-export function runRandomPhase(puzzle, zone, pos, rng, config) {
+export function runRandomPhase(puzzle, zone, pos, rng, config, ctx = null) {
   const requested = rng.range(config.randomMin, config.randomMax);
   const grid = buildGrid(puzzle, pos);
   const chosen = new Set();
   const moves = [];
+  const bm = config.blockMove;
+  const guard = !!(ctx && bm && ctx.limoIds?.length);
+  const target = guard ? ctx.target : null;
+  // 길막기 — 이번 턴에 할지, 하면 몇 번째 이동에서 할지를 먼저 정한다
+  let blockSlot = -1;
+  if (target && rng.chance(blockChance(bm, ctx.lastBlock))) blockSlot = rng.int(requested);
+  // 통로를 완전히 비우는 랜덤 이동을 세기 위해 — 리무진은 랜덤으로 안 움직이므로 통로 칸은 이 턴 내내 그대로다
+  const passages = guard ? livePassages(puzzle, pos, ctx.limoIds, grid) : [];
+  const passageCells = new Set(passages.flatMap((ps) => ps.cells));
+  /** 이 수가 지금 막혀 있는 통로 하나를 완전히 비우는가 (통로 칸에 서 있던 차만 그럴 수 있다) */
+  const clearsSome = (o) => {
+    if (!cellsAt(puzzle, o.vehicle, pos[o.vehicle]).some((k) => passageCells.has(k))) return false;
+    const blockedNow = passages.filter((ps) => occupantCount(grid, ps.cells) > 0);
+    return withMove(puzzle, grid, pos, o, () => blockedNow.some((ps) => occupantCount(grid, ps.cells) === 0));
+  };
+  let clears = 0;
+  let blocked = false;
+
   for (let t = 0; t < requested; t++) {
-    const candidates = randomMovable(puzzle, grid, zone, pos, chosen);
-    if (candidates.length === 0) break;
-    const i = candidates[rng.int(candidates.length)];
-    const back = randomTravel(puzzle, grid, zone, pos, i, -1);
-    const fwd = randomTravel(puzzle, grid, zone, pos, i, 1);
-    const sign = back > 0 && fwd > 0 ? (rng.chance(0.5) ? -1 : 1) : fwd > 0 ? 1 : -1;
-    const dist = sign > 0 ? fwd : back;
+    let options = randomOptions(puzzle, grid, zone, pos, chosen);
+    if (guard && clears >= bm.maxClears) options = options.filter((o) => !clearsSome(o));
+    if (options.length === 0) break;
+
+    let pick = null;
+    let blocking = false;
+    if (t === blockSlot) {
+      // 통로 밖에 있던 차가 미끄러져 통로 칸에 서는 수. 통로가 활짝 열려 있으면 리무진 바로 앞 칸은 피한다
+      const inTarget = (cells) => cells.some((k) => target.cells.includes(k));
+      const emptyNow = occupantCount(grid, target.cells) === 0;
+      const candidates = options.filter((o) => {
+        if (inTarget(cellsAt(puzzle, o.vehicle, pos[o.vehicle]))) return false;
+        const after = cellsAt(puzzle, o.vehicle, pos[o.vehicle] + o.sign * o.dist);
+        return inTarget(after) && !(emptyNow && after.includes(target.cells[0]));
+      });
+      if (candidates.length > 0) {
+        pick = candidates[rng.int(candidates.length)];
+        blocking = true;
+      }
+    }
+    if (!pick) {
+      // 보통 랜덤 이동 — 차를 먼저 고르고, 그 차가 움직이는 방향 중에서 고른다
+      const vehicles = [...new Set(options.map((o) => o.vehicle))];
+      const i = vehicles[rng.int(vehicles.length)];
+      const dirs = options.filter((o) => o.vehicle === i);
+      pick = dirs.length === 2 ? (rng.chance(0.5) ? dirs[0] : dirs[1]) : dirs[0];
+    }
+
+    if (guard && clearsSome(pick)) clears++;
+    const i = pick.vehicle;
     const from = pos[i];
-    const to = from + sign * dist;
+    const to = from + pick.sign * pick.dist;
     setCells(puzzle, grid, i, from, EMPTY);
     pos[i] = to;
     setCells(puzzle, grid, i, to, i + 1);
     chosen.add(i);
-    moves.push({ vehicle: i, sign, from, to, dist });
+    if (blocking) blocked = true;
+    moves.push({ vehicle: i, sign: pick.sign, from, to, dist: pick.dist, blocking });
   }
-  return { requested, moves };
+  return { requested, moves, blocked, target };
 }
 
 // ── 새 차량 ─────────────────────────────────────────────
@@ -255,7 +384,7 @@ export function laneDead(puzzle, grid, pos, i) {
 
 /**
  * 하드 모드 한 판.
- *   state = { puzzle, pos, rng(난수 상태), countdown(null | 남은 턴), turn }
+ *   state = { puzzle, pos, rng(난수 상태), countdown(null | 남은 턴), turn, lastBlock(바로 앞 턴에 길막기를 했는가) }
  *   상태는 매 턴 새 객체로 바꾼다 (바꾸지 않고 갈아끼운다) — 되돌리기는 이전 객체를 다시 끼우면 끝난다.
  */
 export class HardSession {
@@ -277,6 +406,7 @@ export class HardSession {
       rng: createRng(`${this.seed}:turns`).getState(),
       countdown: null,
       turn: 0,
+      lastBlock: false,
     });
     this.restart();
   }
@@ -369,16 +499,17 @@ export class HardSession {
 
     // ① 리무진이 모두 나갔으면(리무진 없는 판은 판이 비면) 즉시 클리어 — 진행 중이던 카운트다운은 취소
     if (this.isCleared(pos)) {
-      this.state = Object.freeze({ puzzle, pos, rng: rng.getState(), countdown: null, turn });
+      this.state = Object.freeze({ puzzle, pos, rng: rng.getState(), countdown: null, turn, lastBlock: false });
       this.status = HardStatus.CLEARED;
       return {
-        moved: true, move: m, random: { requested: 0, moves: [] }, spawned: null,
+        moved: true, move: m, random: { requested: 0, moves: [], blocked: false, target: null }, spawned: null,
         countdown: null, countdownStarted: false, cleared: true,
       };
     }
 
-    // ② 랜덤 이동
-    const random = runRandomPhase(puzzle, this.zone, pos, rng, this.config);
+    // ② 랜덤 이동 — 방금 둔 수로 플레이어가 뚫고 있는 통로를 추정해 넘긴다 (길막기)
+    const target = this.limoIds.length > 0 ? estimateTarget(puzzle, s0.pos, pos, this.limoIds) : null;
+    const random = runRandomPhase(puzzle, this.zone, pos, rng, this.config, { limoIds: this.limoIds, target, lastBlock: s0.lastBlock });
 
     // ③ 카운트다운 — 이 턴을 시작할 때 이미 돌고 있었을 때만 줄인다
     let countdown = s0.countdown;
@@ -402,7 +533,7 @@ export class HardSession {
       countdownStarted = true;
     }
 
-    this.state = Object.freeze({ puzzle, pos, rng: rng.getState(), countdown, turn });
+    this.state = Object.freeze({ puzzle, pos, rng: rng.getState(), countdown, turn, lastBlock: random.blocked });
     this.status = this.#evaluate();
     return {
       moved: true,

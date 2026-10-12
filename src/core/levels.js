@@ -106,6 +106,11 @@ export const HARD_MODE = Object.freeze({
   randomMin: 1,
   randomMax: 4,
   spawnDelay: 3,
+  // 길막기 — 랜덤 이동 중 한 대가 가끔 플레이어가 뚫고 있는 통로를 막으러 온다 (hardMode.runRandomPhase)
+  //   chance    한 턴에 길막기를 할 확률 (그 턴의 랜덤 이동 중 한 대만)
+  //   cooldown  바로 앞 턴에 길막기를 했으면 확률에 이것을 곱한다
+  //   maxClears 랜덤 이동이 리무진 통로를 완전히 비우는 것은 한 턴에 이만큼까지
+  blockMove: Object.freeze({ chance: 0.35, cooldown: 0.5, maxClears: 1 }),
   // 점수 (클리어했을 때만) — base에서 이동 횟수만큼 깎는다. 구간마다 '몇 번 움직이면 1점'이 다르다.
   //   tiers: upTo번째 이동까지는 movesPerPoint회당 1점 (upTo: null = 끝까지). 소수점은 마지막에 버린다
   //   예) 30회 → 70점, 50회 → 55점, 70회 → 45점, 100회 → 35점

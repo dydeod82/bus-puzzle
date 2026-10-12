@@ -164,14 +164,15 @@ export class HardScreen {
       return;
     }
 
-    // ② 랜덤 이동 — 한 대씩 차례로, 주황 강조
+    // ② 랜덤 이동 — 한 대씩 차례로, 주황 강조. 길막기(플레이어가 뚫는 통로로 들어온 차)는 빨강으로 더 오래
     t += RANDOM_GAP_MS;
     const afterRandom = afterPlayer.slice();
     for (const m of r.random.moves) {
       const end = this.renderer.queueSlide(m.vehicle, m.from, m.to, {
         delay: t,
         dur: Math.min(380, 120 + m.dist * 45),
-        highlight: HIGHLIGHT.RANDOM,
+        highlight: m.blocking ? HIGHLIGHT.BLOCK : HIGHLIGHT.RANDOM,
+        hold: m.blocking ? 1800 : 900,
       });
       t = end + RANDOM_GAP_MS;
       afterRandom[m.vehicle] = m.to;
@@ -186,6 +187,7 @@ export class HardScreen {
     const n = r.random.moves.length;
     const limoOut = r.move.exits && this.session.puzzle.vehicles[r.move.vehicle].kind === 'limo';
     const parts = [n > 0 ? `이번 턴 ${n}대 이동` : '움직일 수 있는 차가 없어 랜덤 이동 없음'];
+    if (r.random.blocked) parts.push('🚧 길막기!');
     if (limoOut) parts.unshift(`👑 리무진 탈출! (${this.session.limosOut}/${this.session.limosTotal})`);
     if (r.spawned) parts.push('새 차량 도착!');
     else if (r.countdownStarted) parts.push(`${r.countdown}턴 뒤 새 차량`);
