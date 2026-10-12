@@ -1,6 +1,6 @@
 // 기록 화면 — [일반] / [하드] 탭.
 //   일반: 단계별 클리어 여부·별점·최소 이동(그때 되돌린 횟수)·최단 시간
-//   하드: 플레이·클리어 횟수, 최단 클리어 시간, 최소 이동, 최근 10판 (시드를 누르면 같은 판)
+//   하드: 최고 점수, 플레이·클리어 횟수, 최단 클리어 시간, 최소 이동, 최근 10판 (시드를 누르면 같은 판)
 // ⚠️ 휴대폰 폭에서도 별점과 시간이 잘리지 않도록 일반 표는 열을 넷만 둔다 (되돌림 수는 최소 이동 칸에 함께 적는다)
 
 import { LEVELS } from '../core/levels.js';
@@ -101,6 +101,7 @@ function renderNormal(root, save) {
 
 function renderHard(root, hard) {
   const $ = (id) => root.querySelector(`#${id}`);
+  setBest($('hard-rec-score'), hard.bestScore, (b) => `${b.score}점`);
   $('hard-rec-plays').textContent = `${hard.plays}판`;
   $('hard-rec-clears').textContent = `${hard.clears}판`;
   setBest($('hard-rec-time'), hard.bestTime, (b) => formatTime(b.timeMs));
@@ -125,13 +126,16 @@ function renderHard(root, hard) {
 
     const result = document.createElement('td');
     result.textContent = RESULT_TEXT[e.result];
+    const score = document.createElement('td');
+    score.className = 'score-cell';
+    score.textContent = e.score != null ? `${e.score}점` : '–';   // 점수는 클리어한 판에만
     const time = document.createElement('td');
     time.textContent = done ? formatTime(e.timeMs) : '–';
     const moves = document.createElement('td');
     moves.textContent = done ? `${e.moves}수` : '–';
     if (done && e.undos > 0) moves.append(small(`되돌림 ${e.undos}회`));
 
-    tr.append(seedCell, result, time, moves);
+    tr.append(seedCell, result, score, time, moves);
     tbody.append(tr);
   }
   $('hard-recent-empty').hidden = hard.recent.length > 0;

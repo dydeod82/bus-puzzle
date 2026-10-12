@@ -87,7 +87,7 @@ export class HardScreen {
     this.$('hard-seed').textContent = seed;
     this.$('hard-sub').textContent = `시드 ${seed}`;
     this.renderer.setPuzzle(null, []);
-    this.setStats({ left: '–', moves: '–', time: '0:00', countdown: '–', random: '–' });
+    this.setStats({ left: '–', moves: '–', time: '0:00', countdown: '–', random: '–', score: '–' });
     this.showOverlay('loading');
   }
 
@@ -152,7 +152,12 @@ export class HardScreen {
       this.input.disable();
       this.updateHud();
       const result = {
-        moves: this.session.moveCount, undos: this.session.undoCount, timeMs: this.elapsed(), seed: this.seed, attemptId: this.attemptId,
+        moves: this.session.moveCount,
+        undos: this.session.undoCount,
+        timeMs: this.elapsed(),
+        score: this.session.expectedScore,
+        seed: this.seed,
+        attemptId: this.attemptId,
       };
       this.attemptId = null;   // 클리어로 끝난 시도 — 화면을 떠날 때 '포기'로 다시 적지 않게
       this.pendingTimer = setTimeout(() => this.h.onClear(result), t + 350);
@@ -292,18 +297,21 @@ export class HardScreen {
       time: formatTime(this.elapsed()),
       countdown: cd == null ? '없음' : `${cd}턴 뒤`,
       random: this.lastRandom ? `${this.lastRandom.moves.length}대` : '–',
+      score: `${s.expectedScore}점`,
     });
     this.$('hard-countdown').closest('.stat').classList.toggle('alert', cd != null && cd <= 1);
     this.$('hard-undo-count').textContent = s.undoCount > 0 ? `되돌림 ${s.undoCount}` : '';
-    this.root.querySelector('.game-actions [data-action="undo"]').disabled = s.moveCount === 0;
+    // ⚠️ 이동 횟수는 되돌려도 줄지 않으므로, 되돌릴 수 있는지는 이동 횟수가 아니라 기록된 턴으로 본다
+    this.root.querySelector('.game-actions [data-action="undo"]').disabled = !s.canUndo;
   }
 
-  setStats({ left, moves, time, countdown, random }) {
+  setStats({ left, moves, time, countdown, random, score }) {
     this.$('hard-left').textContent = left;
     this.$('hard-moves').textContent = moves;
     this.$('hard-time').textContent = time;
     this.$('hard-countdown').textContent = countdown;
     this.$('hard-random').textContent = random;
+    this.$('hard-score').textContent = score;
   }
 
   toast(text, hot = false) {

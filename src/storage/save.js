@@ -67,7 +67,13 @@ const RESULTS = new Set(Object.values(HardResult));
 
 function cleanHardBest(b) {
   return b && Number.isFinite(b.timeMs) && isInt(b.moves)
-    ? { timeMs: b.timeMs, moves: b.moves, undos: isInt(b.undos) ? b.undos : 0, seed: typeof b.seed === 'string' ? b.seed : null }
+    ? {
+      score: isInt(b.score) ? b.score : null,
+      timeMs: b.timeMs,
+      moves: b.moves,
+      undos: isInt(b.undos) ? b.undos : 0,
+      seed: typeof b.seed === 'string' ? b.seed : null,
+    }
     : null;
 }
 
@@ -85,12 +91,14 @@ function cleanHard(h) {
       moves: isInt(e.moves) ? e.moves : 0,
       undos: isInt(e.undos) ? e.undos : 0,
       timeMs: Number.isFinite(e.timeMs) ? e.timeMs : 0,
+      score: e.result === HardResult.CLEAR && isInt(e.score) ? e.score : null,   // 점수는 클리어한 판에만
       at: Number.isFinite(e.at) ? e.at : 0,
     }));
   const maxId = recent.reduce((m, e) => Math.max(m, e.id), 0);
   return {
     plays: isInt(h.plays) ? h.plays : recent.length,
     clears: isInt(h.clears) ? h.clears : 0,
+    bestScore: (() => { const x = cleanHardBest(h.bestScore); return x && x.score != null ? x : null; })(),
     bestTime: cleanHardBest(h.bestTime),
     bestMoves: cleanHardBest(h.bestMoves),
     recent,

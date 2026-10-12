@@ -1,7 +1,7 @@
 // 시작점 — 화면들을 잇고, 한 판을 시작·마무리하고, 기록을 저장한다.
 
 import { LEVELS, LEVEL_COUNT, HARD_MODE, freeModeParams } from './core/levels.js';
-import { hardPuzzleParams } from './core/hardMode.js';
+import { hardPuzzleParams, describeHardScore } from './core/hardMode.js';
 import { createPuzzle } from './core/rules.js';
 import { mergeRecord, starsFor, startHardAttempt, finishHardAttempt, HardResult } from './core/records.js';
 import { randomSeedString } from './core/random.js';
@@ -29,6 +29,7 @@ let loadToken = 0;
 const freeUnlocked = () => Boolean(save.records[LEVEL_COUNT]);
 
 const rules = new RulesDialog(document.getElementById('rules'));
+document.getElementById('rules-hard-score').textContent = describeHardScore(HARD_MODE.score);
 
 const game = new GameScreen(screens.el('game'), {
   onClear: (run) => finishPlay(run),
@@ -169,7 +170,7 @@ async function playHard(seed) {
 
 function finishHard(run) {
   const r = finishHardAttempt(save.hard, {
-    id: run.attemptId, seed: run.seed, result: HardResult.CLEAR, moves: run.moves, undos: run.undos, timeMs: run.timeMs,
+    id: run.attemptId, seed: run.seed, result: HardResult.CLEAR, moves: run.moves, undos: run.undos, timeMs: run.timeMs, score: run.score,
   });
   save.hard = r.record;
   writeSave(save);
@@ -178,7 +179,9 @@ function finishHard(run) {
     title: `시드 ${run.seed}`,
     run: { ...run, par: null },
     stars: null,
-    isNew: { first: r.isNew.first, moves: r.isNew.moves, time: r.isNew.time, stars: false },
+    score: run.score,
+    scoreBase: HARD_MODE.score.base,
+    isNew: { first: r.isNew.first, score: r.isNew.score, moves: r.isNew.moves, time: r.isNew.time, stars: false },
     nextLabel: '새 판',
   });
   screens.show('result');

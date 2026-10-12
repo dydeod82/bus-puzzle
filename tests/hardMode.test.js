@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   HardSession, HardStatus, HardStuck, zoneLayout, isSafeCell, inChangeZone, randomMovable, spawnVehicle,
-  checkHardStuck, generateHardPuzzle, hardPuzzleParams,
+  checkHardStuck, generateHardPuzzle, hardPuzzleParams, hardScore,
 } from '../src/core/hardMode.js';
 import { HARD_MODE } from '../src/core/levels.js';
 import { createRng } from '../src/core/random.js';
@@ -329,7 +329,8 @@ test('되돌리기: 새 차량 도착과 카운트다운도 함께 되돌린다'
   s.undo();
   assert.equal(s.puzzle.vehicles.length, 7, '도착한 차가 사라진다');
   assert.equal(s.countdown, 1);
-  assert.equal(s.moveCount, 3);
+  assert.equal(s.turn, 3, '판은 3턴째로 돌아간다');
+  assert.equal(s.moveCount, 4, '되돌려도 이동 횟수는 줄지 않는다');
   assert.equal(s.pos[idOf(p, 'd')], 0, 'd가 판으로 돌아온다');
 
   const again = s.move(idOf(p, 'd'), -1);
@@ -346,4 +347,54 @@ test('막혀서 못 움직인 수는 턴이 아니다 — 랜덤 이동도 카�
   assert.equal(s.state, before);
   assert.equal(s.moveCount, 1);
   assert.equal(s.countdown, 3);
+});
+
+// ── 점수 ────────────────────────────────────────────────
+
+test('점수: 예시 값 — 30회 70점, 50회 55점, 70회 45점, 100회 35점', () => {
+  assert.equal(hardScore(30), 70);
+  assert.equal(hardScore(50), 55);
+  assert.equal(hardScore(70), 45);
+  assert.equal(hardScore(100), 35);
+});
+
+test('점수: 구간 경계와 소수점 버림, 최저 10점', () => {
+  assert.equal(hardScore(0), 100);
+  assert.equal(hardScore(1), 99);
+  assert.equal(hardScore(40), 60);     // 1~40번째는 1회당 1점
+  assert.equal(hardScore(41), 59);     // 100 − 40.5 = 59.5 → 59
+  assert.equal(hardScore(42), 59);     // 100 − 41
+  assert.equal(hardScore(71), 44);     // 100 − 55.33 = 44.67 → 44
+  assert.equal(hardScore(73), 44);     // 100 − 56
+  assert.equal(hardScore(150), 18);
+  assert.equal(hardScore(10000), 10, '클리어하면 최저 10점');
+  for (let n = 1; n <= 300; n++) assert.ok(hardScore(n) <= hardScore(n - 1), '움직일수록 점수가 오르지 않는다');
+});
+
+test('점수: 숫자는 설정에서 바꿀 수 있다', () => {
+  const cfg = { base: 50, min: 5, tiers: [{ upTo: 10, movesPerPoint: 1 }, { upTo: null, movesPerPoint: 5 }] };
+  assert.equal(hardScore(10, cfg), 40);
+  assert.equal(hardScore(20, cfg), 38);
+  assert.equal(hardScore(1000, cfg), 5);
+  assert.equal(hardScore(30, HARD_MODE.score), 70);
+});
+
+test('점수: 이동 횟수는 실제로 움직인 수만 — 막힌 시도·랜덤 이동은 빼고, 되돌려도 줄지 않는다', () => {
+  const p = board(COLUMNS);
+  const s = new HardSession(p, 'score', SMALL);
+  s.move(idOf(p, 'a'), -1);
+  s.move(idOf(p, 'b'), 1);                    // 막힘 — 세지 않는다
+  assert.equal(s.moveCount, 1);
+  s.move(idOf(p, 'b'), -1);
+  assert.equal(s.moveCount, 2);
+  assert.equal(s.expectedScore, 98);
+  s.undo();
+  s.undo();
+  assert.equal(s.turn, 0);
+  assert.equal(s.moveCount, 2, '되돌려도 2회 그대로');
+  assert.equal(s.expectedScore, 98);
+  assert.equal(s.canUndo, false);
+  s.restart();                                 // 같은 판 다시 = 새 시도
+  assert.equal(s.moveCount, 0);
+  assert.equal(s.expectedScore, 100);
 });

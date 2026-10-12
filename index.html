@@ -210,11 +210,12 @@
 
       <aside class="game-side">
         <dl class="stats stats-hard" aria-label="진행 상황">
-          <div class="stat"><dt>남은 차량</dt><dd id="hard-left">0</dd></div>
+          <div class="stat stat-score"><dt>예상 점수</dt><dd id="hard-score">100점</dd></div>
+          <div class="stat"><dt>남은 차</dt><dd id="hard-left">0</dd></div>
           <div class="stat"><dt>이동</dt><dd id="hard-moves">0</dd></div>
           <div class="stat"><dt>시간</dt><dd id="hard-time">0:00</dd></div>
-          <div class="stat"><dt>새 차량 도착</dt><dd id="hard-countdown">없음</dd></div>
-          <div class="stat"><dt>이번 턴 랜덤</dt><dd id="hard-random">–</dd></div>
+          <div class="stat"><dt>새 차량</dt><dd id="hard-countdown">없음</dd></div>
+          <div class="stat"><dt>랜덤</dt><dd id="hard-random">–</dd></div>
         </dl>
         <div class="game-actions four">
           <button class="btn" type="button" data-action="undo">되돌리기<span class="btn-note" id="hard-undo-count"></span></button>
@@ -235,6 +236,7 @@
           <h2 id="result-title" tabindex="-1"></h2>
         </header>
         <div class="stamps" id="result-stars" role="img"></div>
+        <p class="result-score" id="result-score" hidden><strong></strong><span>점</span><small></small></p>
         <dl class="ticket-rows">
           <div><dt>이동</dt><dd id="result-moves"></dd></div>
           <div id="result-par-row"><dt>목표</dt><dd id="result-par"></dd></div>
@@ -279,6 +281,7 @@
 
       <div class="tab-panel" role="tabpanel" id="records-hard" aria-labelledby="tab-hard" hidden>
         <dl class="hard-summary">
+          <div class="best-score"><dt>최고 점수</dt><dd id="hard-rec-score"></dd></div>
           <div><dt>플레이</dt><dd id="hard-rec-plays"></dd></div>
           <div><dt>클리어</dt><dd id="hard-rec-clears"></dd></div>
           <div><dt>최단 클리어 시간</dt><dd id="hard-rec-time"></dd></div>
@@ -288,7 +291,7 @@
         <div class="board-sign table-wrap">
           <table class="records recent">
             <thead>
-              <tr><th scope="col">시드</th><th scope="col">결과</th><th scope="col">시간</th><th scope="col">이동</th></tr>
+              <tr><th scope="col">시드</th><th scope="col">결과</th><th scope="col">점수</th><th scope="col">시간</th><th scope="col">이동</th></tr>
             </thead>
             <tbody id="hard-recent-body"></tbody>
           </table>
@@ -372,6 +375,7 @@
                 내가 차를 움직일 때마다 변화구역의 차 1~4대가 저절로 미끄러져요 (판 밖이나 안전구역으로는 가지 않아요).</li>
               <li>차를 빼면 3턴 뒤 새 차가 한 대 와요. 기다리는 동안 더 빼도 오는 차는 한 대뿐이에요.</li>
               <li>되돌리면 랜덤 이동과 새 차까지 함께 되돌아가요. 같은 수를 다시 두면 같은 일이 일어나요.</li>
+              <li><strong>점수</strong> <span id="rules-hard-score"></span></li>
             </ul>
           </section>
 

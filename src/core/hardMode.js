@@ -252,6 +252,7 @@ export class HardSession {
     this.state = this.initial;
     this.history = [];
     this.undoCount = 0;
+    this.movesMade = 0;
     this.status = this.#evaluate();
   }
 
@@ -263,9 +264,28 @@ export class HardSession {
     return this.state.pos;
   }
 
-  /** 이동 횟수 = 턴 수 (플레이어가 실제로 움직인 횟수) */
+  /**
+   * 이동 횟수 — 플레이어가 실제로 차를 움직인 횟수. 점수가 이것으로 정해진다.
+   * ⚠️ 되돌려도 줄지 않는다 (되돌리기로 점수를 되살릴 수 없게). 랜덤 이동과 막혀서 못 움직인 시도는 세지 않는다.
+   *    판의 '지금 몇 번째 턴인가'는 turn이다 — 그쪽은 되돌리면 함께 돌아간다.
+   */
   get moveCount() {
+    return this.movesMade;
+  }
+
+  /** 지금 판 상태까지 둔 턴 수 (되돌리면 줄어든다) */
+  get turn() {
     return this.state.turn;
+  }
+
+  /** 되돌릴 수 있는 턴이 있는가 */
+  get canUndo() {
+    return this.history.length > 0;
+  }
+
+  /** 지금 클리어하면 받을 점수 */
+  get expectedScore() {
+    return hardScore(this.movesMade, this.config.score);
   }
 
   get remaining() {
@@ -294,6 +314,7 @@ export class HardSession {
     if (!m.moved) return { moved: false, move: m };
 
     this.history.push(s0);
+    this.movesMade += 1;
     const rng = rngFromState(s0.rng);
     let puzzle = s0.puzzle;
     let pos = applyMove(s0.pos, m);
@@ -367,6 +388,38 @@ export class HardSession {
     const r = checkHardStuck(puzzle, this.zone, pos, countdown, { maxStates: this.stuckSearchLimit });
     return r === HardStuck.STUCK ? HardStatus.STUCK : HardStatus.PLAYING;
   }
+}
+
+// ── 점수 ────────────────────────────────────────────────
+
+/**
+ * 클리어 점수 — base에서 이동 횟수만큼 깎는다. 구간마다 '몇 회에 1점'이 다르다 (HARD_MODE.score).
+ *   기본값: 1~40번째 이동은 1회당 1점, 41~70번째는 2회당 1점, 71번째부터는 3회당 1점. 최저 10점.
+ * ★ 구간 안에서는 1회마다 1/movesPerPoint점씩 깎고, 소수점은 마지막에 한 번 버린다
+ *   (41회 → 100 − 40.5 = 59.5 → 59점). 구간을 다 채웠을 때만 깎으면 홀수 횟수가 짝수 횟수와 같은 점수가 된다.
+ */
+export function hardScore(moves, cfg = HARD_MODE.score) {
+  let penalty = 0;
+  let prev = 0;
+  for (const t of cfg.tiers) {
+    const end = t.upTo ?? Infinity;
+    penalty += Math.max(0, Math.min(moves, end) - prev) / t.movesPerPoint;
+    if (moves <= end) break;
+    prev = end;
+  }
+  // 1e-9: 3으로 나눈 값들의 합이 34.99999…처럼 떨어져 1점이 덜 나오는 것을 막는다
+  return Math.max(cfg.min, Math.floor(cfg.base - penalty + 1e-9));
+}
+
+/** 규칙 창에 쓸 설명 — 설정 숫자를 바꾸면 설명도 따라 바뀐다 */
+export function describeHardScore(cfg = HARD_MODE.score) {
+  let from = 1;
+  const parts = cfg.tiers.map((t) => {
+    const range = t.upTo == null ? `${from}번째부터` : `${from}~${t.upTo}번째`;
+    from = (t.upTo ?? 0) + 1;
+    return `${range} ${t.movesPerPoint === 1 ? '1회마다' : `${t.movesPerPoint}회당`} 1점`;
+  });
+  return `클리어하면 ${cfg.base}점에서 이동 횟수만큼 깎여요 — ${parts.join(', ')}. 최저 ${cfg.min}점. 되돌려도 이동 횟수는 줄지 않아요.`;
 }
 
 // ── 판 만들기 ───────────────────────────────────────────

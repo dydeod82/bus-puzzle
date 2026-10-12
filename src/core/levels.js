@@ -98,4 +98,16 @@ export const HARD_MODE = Object.freeze({
   randomMin: 1,
   randomMax: 4,
   spawnDelay: 3,
+  // 점수 (클리어했을 때만) — base에서 이동 횟수만큼 깎는다. 구간마다 '몇 번 움직이면 1점'이 다르다.
+  //   tiers: upTo번째 이동까지는 movesPerPoint회당 1점 (upTo: null = 끝까지). 소수점은 마지막에 버린다
+  //   예) 30회 → 70점, 50회 → 55점, 70회 → 45점, 100회 → 35점
+  score: Object.freeze({
+    base: 100,
+    min: 10,
+    tiers: Object.freeze([
+      Object.freeze({ upTo: 40, movesPerPoint: 1 }),
+      Object.freeze({ upTo: 70, movesPerPoint: 2 }),
+      Object.freeze({ upTo: null, movesPerPoint: 3 }),
+    ]),
+  }),
 });

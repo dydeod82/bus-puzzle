@@ -35,6 +35,14 @@ export function renderResult(root, info) {
     stars.append(s);
   }
 
+  // 하드 모드 점수 (info.score가 있을 때만) — 별점 자리에 크게
+  const scoreEl = $('result-score');
+  scoreEl.hidden = info.score == null;
+  if (info.score != null) {
+    scoreEl.querySelector('strong').textContent = String(info.score);
+    scoreEl.querySelector('small').textContent = info.scoreBase ? ` / ${info.scoreBase}` : '';
+  }
+
   const badges = $('result-badges');
   badges.replaceChildren();
   const add = (text, tone = '') => {
@@ -50,6 +58,7 @@ export function renderResult(root, info) {
     if (info.isNew.moves) add('최소 이동 갱신', 'hot');
     if (info.isNew.time) add('최단 시간 갱신', 'hot');
     if (info.isNew.stars) add('별점 갱신', 'hot');
+    if (info.isNew.score) add('최고 점수 갱신', 'hot');
   }
   if (info.seed) add(`시드 ${info.seed}`, 'plain');
 

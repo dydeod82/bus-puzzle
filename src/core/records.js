@@ -71,7 +71,7 @@ export const HARD_RECENT_LIMIT = 10;
 export const HardResult = Object.freeze({ PLAYING: 'playing', CLEAR: 'clear', QUIT: 'quit', STUCK: 'stuck' });
 
 export function emptyHardRecord() {
-  return { plays: 0, clears: 0, bestTime: null, bestMoves: null, recent: [], nextId: 1 };
+  return { plays: 0, clears: 0, bestScore: null, bestTime: null, bestMoves: null, recent: [], nextId: 1 };
 }
 
 /**
@@ -81,33 +81,42 @@ export function emptyHardRecord() {
 export function startHardAttempt(record, { seed, at }) {
   const r = record ?? emptyHardRecord();
   const id = r.nextId;
-  const entry = { id, seed, result: HardResult.PLAYING, moves: 0, undos: 0, timeMs: 0, at };
+  const entry = { id, seed, result: HardResult.PLAYING, moves: 0, undos: 0, timeMs: 0, score: null, at };
   return {
     record: { ...r, plays: r.plays + 1, nextId: id + 1, recent: [entry, ...r.recent].slice(0, HARD_RECENT_LIMIT) },
     id,
   };
 }
 
+const NO_NEW = Object.freeze({ first: false, score: false, time: false, moves: false });
+
 /**
- * 시도 끝. 최근 기록의 그 줄을 채우고, 클리어면 최단 시간·최소 이동을 견준다.
+ * 시도 끝. 최근 기록의 그 줄을 채우고, 클리어면 최고 점수·최단 시간·최소 이동을 견준다.
+ * ★ 점수는 클리어했을 때만 남긴다 — 포기·막힘은 score가 null이다.
  * 그 줄이 이미 10판 밖으로 밀려났어도 횟수·최고 기록은 반영한다.
- * @param info { id, seed, result, moves, undos, timeMs }
- * @returns {{ record, isNew: { first, time, moves } }}
+ * @param info { id, seed, result, moves, undos, timeMs, score }
+ * @returns {{ record, isNew: { first, score, time, moves } }}
  */
-export function finishHardAttempt(record, { id, seed: givenSeed, result, moves, undos, timeMs }) {
+export function finishHardAttempt(record, { id, seed: givenSeed, result, moves, undos, timeMs, score }) {
   const r = record ?? emptyHardRecord();
   const target = r.recent.find((e) => e.id === id);
   // ⚠️ 이미 끝난 시도는 다시 끝내지 않는다 — 클리어를 적은 뒤 화면을 떠나며 '포기'로 덮거나, 클리어를 두 번 세는 일을 막는다
-  if (target && target.result !== HardResult.PLAYING) return { record: r, isNew: { first: false, time: false, moves: false } };
+  if (target && target.result !== HardResult.PLAYING) return { record: r, isNew: { ...NO_NEW } };
   const seed = givenSeed ?? target?.seed ?? null;
-  const recent = r.recent.map((e) => (e.id === id ? { ...e, result, moves, undos, timeMs } : e));
-  const isNew = { first: false, time: false, moves: false };
-  let { clears, bestTime, bestMoves } = r;
+  const cleared = result === HardResult.CLEAR;
+  const kept = cleared && Number.isFinite(score) ? score : null;
+  const recent = r.recent.map((e) => (e.id === id ? { ...e, result, moves, undos, timeMs, score: kept } : e));
+  const isNew = { ...NO_NEW };
+  let { clears, bestScore, bestTime, bestMoves } = r;
 
-  if (result === HardResult.CLEAR) {
+  if (cleared) {
     isNew.first = clears === 0;
     clears += 1;
-    const entry = { timeMs, moves, undos, seed };
+    const entry = { score: kept, timeMs, moves, undos, seed };
+    if (kept != null && (!bestScore || kept > bestScore.score || (kept === bestScore.score && timeMs < bestScore.timeMs))) {
+      isNew.score = !isNew.first;
+      bestScore = entry;
+    }
     if (!bestTime || timeMs < bestTime.timeMs) {
       isNew.time = !isNew.first;
       bestTime = entry;
@@ -117,5 +126,5 @@ export function finishHardAttempt(record, { id, seed: givenSeed, result, moves, 
       bestMoves = entry;
     }
   }
-  return { record: { ...r, clears, bestTime, bestMoves, recent }, isNew };
+  return { record: { ...r, clears, bestScore: bestScore ?? null, bestTime, bestMoves, recent }, isNew };
 }
