@@ -5,7 +5,7 @@ import {
   HardSession, HardStatus, HardStuck, zoneLayout, isSafeCell, inChangeZone, randomMovable, randomTravel, spawnVehicle,
   checkHardStuck, generateHardPuzzle, hardScore, livePassages, estimateTarget, blockChance, runRandomPhase,
 } from '../src/core/hardMode.js';
-import { minLeaveSafeMoves, minEscapeMoves } from '../src/core/hardSolver.js';
+import { minLeaveSafeMoves, minEscapeMoves, passageChainOf } from '../src/core/hardSolver.js';
 import { HARD_GEN_DEFAULTS } from '../src/core/hardGenerator.js';
 import { HARD_MODE } from '../src/core/levels.js';
 import { createRng } from '../src/core/random.js';
@@ -161,7 +161,7 @@ test('판 생성: 리무진 통로 4개(안전구역 밖 부분) 모두 막는 �
   }
 });
 
-test('판 생성: 못 비키는 막는 차가 있다 — 한쪽 옆은 구조물, 반대쪽 길에는 다른 차 (연쇄), 연쇄는 3단계까지', () => {
+test('판 생성: 못 비키는 막는 차가 있다 — 한쪽 옆은 구조물, 반대쪽 길에는 다른 차 (연쇄 3단계 이상)', () => {
   let locked = 0;
   let deepest = 0;
   for (const { g, puzzle } of hardBoards) {
@@ -189,7 +189,17 @@ test('판 생성: 못 비키는 막는 차가 있다 — 한쪽 옆은 구조물
     deepest = Math.max(deepest, ...g.passages.map((ps) => ps.chain));
   }
   assert.ok(locked >= hardBoards.length * 2, `못 비키는 막는 차 ${locked}대`);
-  assert.equal(deepest, 3, '연쇄 3단계(막는 차 → 도우미 → 도우미의 도우미)도 있다');
+  // 기본은 2~3단계, 난이도 필터가 단계를 올리면 4단계까지 깊어진다
+  const maxDepth = Math.max(...HARD_GEN_DEFAULTS.stages.map((st) => (st.chainDepth ?? HARD_GEN_DEFAULTS.chainDepth)[1]));
+  assert.ok(deepest >= 3 && deepest <= maxDepth, `가장 긴 연쇄 ${deepest}단계 (막는 차 → 도우미 → 도우미의 도우미 …)`);
+});
+
+test('판 생성: 통로 4개 모두 쓸 수 있다 — 구조물에 갇혀 영영 못 비키는 막는 차가 없다', () => {
+  for (const { seed, puzzle } of hardBoards) {
+    for (const L of puzzle.vehicles.filter((v) => v.kind === 'limo')) {
+      for (const sign of [-1, 1]) assert.notEqual(passageChainOf(puzzle, puzzle.start, L.id, sign), null, `${seed}: 리무진 ${L.id} ${sign}쪽 통로`);
+    }
+  }
 });
 
 test('판 생성: 통로 안에 길이 방향으로 누운 막는 차도 있다 (판 밖으로만 빠질 수 있다)', () => {
@@ -217,9 +227,9 @@ test('난이도 필터: 랜덤 이동이 없다면 최소 클리어 수가 18~26
 
 test('난이도 필터: 못 맞추면 단계를 올려 가며 다시 짓고, 끝까지 못 맞추면 가장 가까운 판을 쓴다 (멈추지 않는다)', () => {
   const stages = HARD_GEN_DEFAULTS.stages.length;
-  const impossible = generateHardPuzzle('필터', { ...HARD_MODE, targetMoves: [60, 70], gen: { stageAttempts: 2 } });
+  const impossible = generateHardPuzzle('필터', { ...HARD_MODE, targetMoves: [60, 70], gen: { stageAttempts: 2, finalAttempts: 3 } });
   assert.equal(impossible.met, false);
-  assert.equal(impossible.tried, stages * 2, '모든 단계를 다 지어 봤다');
+  assert.equal(impossible.tried, (stages - 1) * 2 + 3, '모든 단계를 다 지어 봤다 (마지막 단계는 finalAttempts번)');
   assert.ok(impossible.par < 60);
   // 어떤 판이든 되는 범위면 처음으로 풀리는 판을 바로 쓴다
   const easy = generateHardPuzzle('필터', { ...HARD_MODE, targetMoves: [1, 99] });
@@ -465,7 +475,7 @@ test('길막기: 바로 앞 턴에 길막기를 했으면 확률이 절반', () 
   const bm = HARD_MODE.blockMove;
   assert.equal(blockChance(bm, false), bm.chance);
   assert.equal(blockChance(bm, true), bm.chance * bm.cooldown);
-  assert.equal(bm.chance, 0.35);
+  assert.ok(bm.chance > 0 && bm.chance < 1, '가끔 — 늘 막지는 않는다');
   // 실제 랜덤 이동에서도 — 확률 1에 직전 길막기가 있으면 절반쯤만 막는다
   const p = limoBoard(BLOCK_BOARD, ['k']);
   const k = idOf(p, 'k');

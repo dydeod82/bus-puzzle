@@ -176,7 +176,7 @@ function makeSweeper(puzzle) {
 
 /**
  * 통로 하나를 쓰려면 반드시 움직여야 하는 차들 — 연쇄로 따라간다.
- * @returns null(이 통로는 영영 못 쓴다) | { must: 차 번호들, either: [[A쪽 차들], [B쪽 차들]] 목록 }
+ * @returns null(이 통로는 영영 못 쓴다) | { must: 차 번호들, either: [[A쪽 차들], [B쪽 차들]] 목록, depth: 연쇄 단계 }
  */
 function passageChain(sw, pos, grid, L, sign, depthLimit, mark, stamp, span = Infinity, fp = null) {
   const { N, H, LANE, LEN, at } = sw;
@@ -202,6 +202,7 @@ function passageChain(sw, pos, grid, L, sign, depthLimit, mark, stamp, span = In
     else if (!Number.isFinite(span)) queue.push([b, 0, 0, sign, 1, -1, 0]);                   // 같은 방향 — 바깥으로 나가야 한다
     else queue.push([b, Math.min(first, last), Math.max(first, last), 0, 1, L, sign]);        // 같은 방향 — 그 몇 칸만 비우면 된다
   }
+  let deepest = must.length > 0 ? 1 : 0;   // 반드시 움직일 차의 연쇄가 몇 단계까지 이어지나 (막는 차 = 1)
   for (let q = 0; q < queue.length; q++) {
     const [i, , , exitDir, depth] = queue[q];
     let opts = sw.itemOptions(grid, pos, queue[q], fp);
@@ -229,10 +230,11 @@ function passageChain(sw, pos, grid, L, sign, depthLimit, mark, stamp, span = In
       if (mark[o] === stamp) continue;
       mark[o] = stamp;
       must.push(o);
+      deepest = Math.max(deepest, depth + 1);
       if (depth < depthLimit) queue.push(sw.next(o, i, opts[0], exitDir, depth + 1, pos[i]));
     }
   }
-  return { must, either };
+  return { must, either, depth: deepest };
 }
 
 /**
@@ -264,7 +266,7 @@ function forcedClosure(sw, pos, grid, i, opt, exitDir, depthLeft, fp) {
 }
 
 /**
- * 통로 하나의 연쇄 (분석·시험용) — { must, either } | null. trace 배열을 넘기면 막힌 이유를 남긴다
+ * 통로 하나의 연쇄 (분석·시험용) — { must, either, depth(연쇄 단계) } | null(못 쓰는 통로). trace 배열을 넘기면 막힌 이유를 남긴다
  */
 export function passageChainOf(puzzle, pos, limoId, sign, { depth = HARD_SOLVER_DEFAULTS.chainDepth, trace = null } = {}) {
   const sw = makeSweeper(puzzle);
@@ -745,9 +747,17 @@ export function minLeaveSafeMoves(puzzle, pos, limoId, inSafe, opts = {}) {
 export function minClearPassageMoves(puzzle, pos, passage, opts = {}) {
   const o = { ...HARD_SOLVER_DEFAULTS, ...opts };
   const grid0 = buildFullGrid(puzzle, pos);
-  const { ids } = relevantVehicles(puzzle, pos, grid0, passage.blockers, o.closureDepth);
+  // 관련 차량·휴리스틱은 리무진을 빼는 탐색과 같은 연쇄 규칙 — 그 통로 하나에 대해서만 (리무진은 세지도 움직이지도 않는다)
+  const { ids } = chainRelevant(puzzle, pos, grid0, [passage.limo], o.closureDepth);
   const cells = passage.cells;
   const clear = (p, g) => cells.every((k) => g[k] <= 0);
-  const heuristic = (p, g) => (cells.some((k) => g[k] === BLOCK) ? Infinity : new Set(cells.map((k) => g[k]).filter((x) => x > 0)).size);
+  const sw = makeSweeper(puzzle);
+  const mark = new Int32Array(sw.V);
+  const seen = new Int32Array(sw.V);
+  let stamp = 0;
+  const heuristic = (p, g) => {
+    const c = passageChain(sw, p, g, passage.limo, passage.sign, o.chainDepth, mark, ++stamp);
+    return c ? boundOf([c], [], p, seen, ++stamp) : Infinity;
+  };
   return searchHard(puzzle, pos, ids.filter((i) => i !== passage.limo), clear, heuristic, o);
 }
