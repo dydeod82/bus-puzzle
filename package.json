@@ -1,0 +1,9 @@
+{
+  "name": "bus-puzzle",
+  "private": true,
+  "description": "버스 빼기 퍼즐 — 외부 라이브러리 없는 순수 JS 웹 게임",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

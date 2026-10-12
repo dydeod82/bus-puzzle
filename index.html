@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>버스 빼기</title>
+  <meta name="description" content="판 위의 버스와 자동차를 모두 밖으로 빼내는 퍼즐">
+  <meta name="theme-color" content="#121419">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='14' width='56' height='36' rx='9' fill='%23ffc533'/%3E%3Crect x='10' y='19' width='8' height='6' rx='2' fill='%231f2a36'/%3E%3Crect x='22' y='19' width='8' height='6' rx='2' fill='%231f2a36'/%3E%3Crect x='34' y='19' width='8' height='6' rx='2' fill='%231f2a36'/%3E%3Crect x='48' y='18' width='7' height='28' rx='3' fill='%231f2a36'/%3E%3Ccircle cx='17' cy='50' r='5' fill='%23222'/%3E%3Ccircle cx='45' cy='50' r='5' fill='%23222'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="src/main.js"></script>
+</head>
+<body>
+  <div class="boot-fallback" id="boot-fallback">
+    <p>불러오는 중…</p>
+    <p class="boot-hint">계속 이 화면이면 index.html을 파일로 직접 연 것일 수 있어요.<br>
+      README의 '로컬에서 실행' 명령으로 서버를 띄우고 <code>http://localhost:8000</code>으로 열어 주세요.</p>
+  </div>
+
+  <main class="app" id="app">
+
+    <!-- ── 시작 화면 ───────────────────────────── -->
+    <section class="screen screen-title" data-screen="title" aria-labelledby="title-heading">
+      <div class="traffic" aria-hidden="true">
+        <div class="lane"><span class="toy car c1"></span><span class="toy bus"></span><span class="toy car c2"></span></div>
+        <div class="lane rev"><span class="toy car c3"></span><span class="toy car c4"></span><span class="toy bus"></span></div>
+        <div class="lane"><span class="toy bus"></span><span class="toy car c5"></span></div>
+        <div class="lane rev"><span class="toy car c6"></span><span class="toy car c1"></span></div>
+      </div>
+
+      <div class="title-plate">
+        <p class="kicker">주차장 탈출 퍼즐</p>
+        <h1 id="title-heading" class="logo" tabindex="-1"><span class="logo-a">버스</span><span class="logo-b">빼기</span></h1>
+        <nav class="title-menu" aria-label="메인 메뉴">
+          <button class="btn btn-primary" type="button" data-action="start">시작</button>
+          <button class="btn" type="button" data-action="records">기록</button>
+          <button class="btn" type="button" data-action="free" id="btn-free">자유 모드<span class="btn-note"></span></button>
+          <button class="btn btn-ghost" type="button" data-action="rules-open">규칙 보기</button>
+        </nav>
+        <p class="title-foot" id="title-progress"></p>
+      </div>
+    </section>
+
+    <!-- ── 단계 선택 ───────────────────────────── -->
+    <section class="screen screen-levels" data-screen="levels" aria-labelledby="levels-heading">
+      <header class="topbar">
+        <button class="btn-icon" type="button" data-action="home" aria-label="메인으로">←</button>
+        <h2 id="levels-heading" tabindex="-1">노선 선택</h2>
+        <span class="topbar-spacer"></span>
+      </header>
+      <p class="screen-lead">이전 정류장을 지나야 다음 정류장이 열려요.</p>
+      <ol class="route" id="route"></ol>
+    </section>
+
+    <!-- ── 플레이 ──────────────────────────────── -->
+    <section class="screen screen-game" data-screen="game" aria-labelledby="game-title">
+      <header class="game-top">
+        <button class="btn-icon wide" type="button" data-action="exit">나가기</button>
+        <div class="game-heading">
+          <h2 id="game-title" tabindex="-1">1단계</h2>
+          <p id="game-sub"></p>
+        </div>
+        <button class="btn-icon" type="button" data-action="rules" aria-label="규칙 보기">?</button>
+      </header>
+
+      <div class="board-wrap" id="board-wrap">
+        <canvas id="board" tabindex="0" data-autofocus role="application"
+          aria-label="퍼즐 판. 방향키로 고른 차를 밀고, Tab으로 다른 차를 고릅니다."></canvas>
+
+        <div class="overlay" data-overlay="loading" hidden>
+          <div class="overlay-card">
+            <div class="spinner" aria-hidden="true"><span></span><span></span><span></span></div>
+            <p>판을 준비하는 중…</p>
+          </div>
+        </div>
+        <div class="overlay" data-overlay="stuck" role="alertdialog" aria-labelledby="stuck-title" hidden>
+          <div class="overlay-card warn">
+            <h3 id="stuck-title">막혔어요</h3>
+            <p>남은 차 중 어느 것도 밖으로 나갈 수 없어요.</p>
+            <div class="overlay-actions">
+              <button class="btn btn-primary" type="button" data-action="undo" data-autofocus>되돌리기</button>
+              <button class="btn" type="button" data-action="restart">재시작</button>
+            </div>
+          </div>
+        </div>
+        <div class="overlay" data-overlay="exit" role="alertdialog" aria-labelledby="exit-title" hidden>
+          <div class="overlay-card">
+            <h3 id="exit-title">이 판을 그만둘까요?</h3>
+            <p>지금까지 움직인 것은 저장되지 않아요.</p>
+            <div class="overlay-actions">
+              <button class="btn btn-primary" type="button" data-action="stay" data-autofocus>계속하기</button>
+              <button class="btn" type="button" data-action="leave">나가기</button>
+            </div>
+          </div>
+        </div>
+        <div class="overlay" data-overlay="error" role="alertdialog" aria-labelledby="error-title" hidden>
+          <div class="overlay-card warn">
+            <h3 id="error-title">판을 만들지 못했어요</h3>
+            <p id="error-text"></p>
+            <div class="overlay-actions">
+              <button class="btn btn-primary" type="button" data-action="leave" data-autofocus>돌아가기</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="game-side">
+        <dl class="stats" aria-label="진행 상황">
+          <div class="stat"><dt>남은 차량</dt><dd id="stat-left">0</dd></div>
+          <div class="stat"><dt>이동</dt><dd id="stat-moves">0</dd></div>
+          <div class="stat"><dt>시간</dt><dd id="stat-time">0:00</dd></div>
+        </dl>
+        <div class="game-actions">
+          <button class="btn" type="button" data-action="undo">되돌리기<span class="btn-note" id="undo-count"></span></button>
+          <button class="btn" type="button" data-action="restart">재시작</button>
+        </div>
+        <p class="keys-hint"><kbd>←↑↓→</kbd> 밀기·고르기 <kbd>Tab</kbd> 다음 차 <kbd>Z</kbd> 되돌리기 <kbd>R</kbd> 재시작</p>
+      </aside>
+      <p class="sr-only" aria-live="polite" id="game-live"></p>
+    </section>
+
+    <!-- ── 결과 ─────────────────────────────────── -->
+    <section class="screen screen-result" data-screen="result" aria-labelledby="result-title">
+      <article class="ticket">
+        <header class="ticket-head">
+          <p class="kicker" id="result-kicker">운행 완료</p>
+          <h2 id="result-title" tabindex="-1"></h2>
+        </header>
+        <div class="stamps" id="result-stars" role="img"></div>
+        <dl class="ticket-rows">
+          <div><dt>이동</dt><dd id="result-moves"></dd></div>
+          <div><dt>목표</dt><dd id="result-par"></dd></div>
+          <div><dt>시간</dt><dd id="result-time"></dd></div>
+          <div><dt>되돌리기</dt><dd id="result-undos"></dd></div>
+        </dl>
+        <ul class="badges" id="result-badges"></ul>
+        <div class="ticket-tear" aria-hidden="true"></div>
+        <div class="ticket-actions">
+          <button class="btn" type="button" data-action="retry">재도전</button>
+          <button class="btn btn-primary" type="button" data-action="next">다음 단계</button>
+          <button class="btn btn-ghost" type="button" data-action="home">메인으로</button>
+        </div>
+      </article>
+    </section>
+
+    <!-- ── 기록 ─────────────────────────────────── -->
+    <section class="screen screen-records" data-screen="records" aria-labelledby="records-heading">
+      <header class="topbar">
+        <button class="btn-icon" type="button" data-action="home" aria-label="메인으로">←</button>
+        <h2 id="records-heading" tabindex="-1">운행 기록</h2>
+        <span class="topbar-spacer"></span>
+      </header>
+      <p class="screen-lead" id="records-summary"></p>
+      <div class="board-sign table-wrap">
+        <table class="records">
+          <thead>
+            <tr>
+              <th scope="col">단계</th><th scope="col">별점 · 클리어</th><th scope="col">최소 이동</th><th scope="col">최단 시간</th>
+            </tr>
+          </thead>
+          <tbody id="records-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── 자유 모드 ────────────────────────────── -->
+    <section class="screen screen-free" data-screen="free" aria-labelledby="free-heading">
+      <header class="topbar">
+        <button class="btn-icon" type="button" data-action="home" aria-label="메인으로">←</button>
+        <h2 id="free-heading" tabindex="-1">자유 모드</h2>
+        <span class="topbar-spacer"></span>
+      </header>
+      <form class="board-sign free-form" id="free-form" autocomplete="off">
+        <div class="slider-row">
+          <label for="free-size">판 크기</label><output id="free-size-out" for="free-size"></output>
+          <input type="range" id="free-size" step="1">
+        </div>
+        <div class="slider-row">
+          <label for="free-cars">자동차</label><output id="free-cars-out" for="free-cars"></output>
+          <input type="range" id="free-cars" step="1">
+        </div>
+        <div class="slider-row">
+          <label for="free-buses">버스</label><output id="free-buses-out" for="free-buses"></output>
+          <input type="range" id="free-buses" step="1">
+        </div>
+        <div class="slider-row">
+          <label for="free-blocks">구조물</label><output id="free-blocks-out" for="free-blocks"></output>
+          <input type="range" id="free-blocks" step="1">
+        </div>
+
+        <div class="fill-meter">
+          <span>칸 채움</span>
+          <div class="fill-bar" id="free-fill-bar"><i></i></div>
+          <strong id="free-fill"></strong>
+        </div>
+        <p class="free-info" id="free-info"></p>
+        <p class="free-problem" id="free-problem" role="alert" hidden></p>
+
+        <div class="seed-row">
+          <label for="free-seed">시드</label>
+          <input type="text" id="free-seed" maxlength="40" placeholder="비우면 무작위" spellcheck="false">
+          <button class="btn btn-small" type="button" data-action="free-random-seed">무작위</button>
+        </div>
+        <p class="seed-help">같은 설정에 같은 시드를 넣으면 언제나 같은 판이 나와요.</p>
+
+        <button class="btn btn-primary btn-wide" type="submit" data-action="free-play">판 만들기</button>
+      </form>
+    </section>
+  </main>
+
+  <!-- ── 규칙 ─────────────────────────────────── -->
+  <dialog class="rules" id="rules" aria-labelledby="rules-title">
+    <div class="rules-inner">
+      <header class="rules-head">
+        <h2 id="rules-title">규칙</h2>
+        <button class="btn-icon" type="button" data-action="rules-close" aria-label="닫기">✕</button>
+      </header>
+
+      <div class="rules-body">
+        <div class="rules-text">
+          <ol class="rule-list">
+            <li><strong>목표</strong> 판 위의 차를 <em>모두</em> 밖으로 빼내면 클리어예요.</li>
+            <li><strong>미는 법</strong> 차의 <em>앞쪽 절반</em>을 누르면 앞으로, <em>뒤쪽 절반</em>을 누르면 뒤로 가요.
+              (누른 쪽 끝 방향으로 간다고 보면 돼요.) 차를 그 방향으로 쓱 밀어도 돼요.</li>
+            <li><strong>움직임</strong> 차는 자기 길이 방향으로만, 무언가에 막힐 때까지 미끄러져요. 중간에 멈출 수 없어요.
+              길이 판 끝까지 비어 있으면 그대로 밖으로 나가요.</li>
+            <li><strong>막힐 때</strong> 한 칸도 못 움직이면 덜컹 흔들리기만 하고 이동 횟수에 들어가지 않아요.
+              남은 차가 어떻게 해도 나갈 수 없게 되면 <em>막혔어요</em> 안내가 떠요 — 되돌리거나 다시 시작하세요.</li>
+            <li><strong>별점</strong> 목표 이동 수(가장 짧은 풀이) 이내면 ★★★, 1.3배 이내면 ★★, 그 밖은 ★.
+              되돌리면 이동 수도 줄지만, 되돌린 횟수는 기록에 함께 남아요.</li>
+          </ol>
+
+          <ul class="legend" aria-label="판 위의 것들">
+            <li><span class="legend-icon car"></span>자동차 · 2칸</li>
+            <li><span class="legend-icon bus"></span>버스 · 3칸</li>
+            <li><span class="legend-icon block"></span>구조물 · 움직이지 않아요</li>
+            <li><span class="legend-icon front">›</span>지붕의 › 표시와 앞유리가 앞쪽</li>
+          </ul>
+
+          <p class="keys">
+            <kbd>←↑↓→</kbd>(또는 <kbd>WASD</kbd>) 고른 차를 그 방향으로 밀기 — 차 방향과 다른 방향키는 그쪽의 다른 차를 골라요 ·
+            <kbd>Tab</kbd> 다음 차 · <kbd>Z</kbd> 되돌리기 · <kbd>R</kbd> 재시작 · <kbd>Esc</kbd> 나가기
+          </p>
+        </div>
+
+        <figure class="demo">
+          <div class="demo-board"><canvas id="demo-board" aria-label="연습 판"></canvas></div>
+          <figcaption>
+            <span id="demo-status">차를 눌러 보세요.</span>
+            <button class="btn btn-small" type="button" data-action="demo-reset">다시</button>
+          </figcaption>
+        </figure>
+      </div>
+    </div>
+  </dialog>
+</body>
+</html>
