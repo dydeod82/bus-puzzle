@@ -25,7 +25,7 @@
 // ⚠️ 같은 시드 → 같은 판. 난수는 전부 시드 난수 하나에서만 뽑고, 솔버 한도도 시간이 아니라 상태 수다.
 
 import { createRng } from './random.js';
-import { createPuzzle, EMPTY, BLOCK, VEHICLE_LENGTH } from './rules.js';
+import { createPuzzle, EMPTY, BLOCK, EXITED, VEHICLE_LENGTH } from './rules.js';
 import { solve } from './solver.js';
 
 /** 생성 규칙을 바꾸면 올릴 것 — 저장해 둔 판 캐시가 이 값으로 무효가 된다 */
@@ -45,6 +45,12 @@ const DEFAULTS = Object.freeze({
   candidates: 120,     // 들여보내기 한 번에 견줘 볼 자리 후보 수 (들어갈 수 있는 자리가 더 적으면 전부)
   loopTries: 4000,     // 고리 하나를 놓을 자리(모양·방향·위치 조합)를 견줘 볼 최대 수
   solverLimit: 20000,  // 솔버 탐색 한도 (상태 수)
+  // 하드 모드용 — 일반 판에서는 모두 0/'all'이라 짓는 방식이 그대로다
+  safeSize: 0,         // 판 정중앙에 비워 둘 정사각형(안전구역) 크기. 일반 차량·구조물은 이 밖에만 놓는다
+  limos: 0,            // 안전구역 안에 놓을 리무진 수 (가장 먼저 들여보낸다 = 앞으로 돌리면 가장 나중에 나간다)
+  goal: 'all',         // 'all' = 판을 다 비울 수 있어야 한다, 'limo' = 리무진만 다 빼낼 수 있으면 된다
+  pack: false,         // true = 빽빽한 판용 — 안쪽 고리부터, 앞이 막힐 때까지 깊이 밀어 넣는다 (아래 insert 설명)
+  blockDepth: null,    // [최소, 최대] — 구조물을 놓을 고리 범위 (가장자리 = 0). null이면 아무 데나
 });
 
 const BLOCKS_RESERVED_PER_LOOP = 4;
@@ -83,11 +89,14 @@ function generateWith(p, seed) {
 
     const def = toDef(st, rng);
     const puzzle = createPuzzle(def);
-    let result = solve(puzzle, puzzle.start, { maxStates: p.solverLimit });
+    // 하드 모드: "랜덤 이동이 없다면 리무진을 모두 뺄 수 있는가"를 본다
+    const limoIds = puzzle.vehicles.filter((v) => v.kind === 'limo').map((v) => v.id);
+    const goal = p.goal === 'limo' && limoIds.length > 0 ? (pos) => limoIds.every((i) => pos[i] === EXITED) : null;
+    let result = solve(puzzle, puzzle.start, { maxStates: p.solverLimit, goal });
     if (!result.solved) continue;
     if (result.slides > st.loops) {
       // 고리 수보다 많이 밀었다 — 밀어 두기 횟수 순으로 다시 훑어 더 짧은 수순이 있는지 본다
-      const exact = solve(puzzle, puzzle.start, { maxStates: p.solverLimit, guided: false });
+      const exact = solve(puzzle, puzzle.start, { maxStates: p.solverLimit, guided: false, goal });
       if (exact.solved && exact.slides < result.slides) result = exact;
     }
 
@@ -170,11 +179,22 @@ function build(p, rng) {
     blocks: [],
     blockBudget: p.blocks,
     loops: 0,
+    center: p.safeSize > 0 ? centerSquare(N, p.safeSize) : null,   // 안전구역 { lo, hi } — 일반 차량·구조물을 놓지 않는다
   };
 
   // 처음 구조물 — 고리용으로 몇 개는 남겨 둔다 (남으면 마지막에 빈 곳에 놓는다)
   const initial = Math.max(0, p.blocks - BLOCKS_RESERVED_PER_LOOP * p.loops);
-  for (const k of rng.shuffle([...Array(N * N).keys()]).slice(0, initial)) placeBlock(st, k);
+  // 안전구역의 리무진 — 빈 판일 때 가장 먼저 들여보낸다 (앞으로 돌리면 가장 나중에 나가는 차).
+  // ★ 구조물보다 먼저 둔다 — 리무진이 나갈 길은 touched가 되어 구조물이 그 위에 놓이지 않는다 (구조물 벽의 '문'이 된다)
+  for (let k = 0; k < p.limos; k++) {
+    if (!insert(st, 'limo', rng, p.candidates, 'center', false)) return null;
+  }
+
+  const ringOf = (k) => Math.min(k % N, Math.floor(k / N), N - 1 - (k % N), N - 1 - Math.floor(k / N));
+  const blockCells = [...Array(N * N).keys()].filter((k) => !inCenter(st, k % N, Math.floor(k / N))
+    && !st.touched[k]
+    && (!p.blockDepth || (ringOf(k) >= p.blockDepth[0] && ringOf(k) <= p.blockDepth[1])));
+  for (const k of rng.shuffle(blockCells).slice(0, initial)) placeBlock(st, k);
 
   const pool = { car: p.cars, bus: p.buses };
   const total = p.cars + p.buses;
@@ -200,9 +220,19 @@ function build(p, rng) {
 
     // 버스는 긴 빈 줄이 필요하므로 앞쪽에서 더 자주 뽑는다
     const busShare = pool.bus / (pool.car + pool.bus);
-    const kind = pool.bus > 0 && (pool.car === 0 || rng.next() < Math.min(1, busShare * 1.4)) ? 'bus' : 'car';
-    if (!insert(st, kind, rng, p.candidates)) return null;
-    pool[kind]--;
+    // 빽빽한 판은 버스(3칸)를 먼저 다 넣는다 — 3칸 빈 줄은 판이 찰수록 금방 사라진다
+    const kind = p.pack
+      ? (pool.bus > 0 ? 'bus' : 'car')
+      : pool.bus > 0 && (pool.car === 0 || rng.next() < Math.min(1, busShare * 1.4)) ? 'bus' : 'car';
+    if (insert(st, kind, rng, p.candidates, st.center ? 'outer' : null, p.pack)) {
+      pool[kind]--;
+      placed++;
+      continue;
+    }
+    // 빽빽한 판: 버스가 들어갈 3칸 줄이 없으면 자동차를 먼저 (끝까지 못 넣으면 그때 실패)
+    const other = kind === 'bus' ? 'car' : 'bus';
+    if (!p.pack || pool[other] === 0 || !insert(st, other, rng, p.candidates, st.center ? 'outer' : null, true)) return null;
+    pool[other]--;
     placed++;
   }
 
@@ -213,17 +243,57 @@ function build(p, rng) {
 
   // 남은 구조물 — 아무도 지나간 적 없는 빈칸에만
   const free = [];
-  for (let k = 0; k < N * N; k++) if (st.grid[k] === EMPTY && !st.touched[k]) free.push(k);
+  for (let k = 0; k < N * N; k++) {
+    if (st.grid[k] === EMPTY && !st.touched[k] && !inCenter(st, k % N, Math.floor(k / N))) free.push(k);
+  }
   for (const k of rng.shuffle(free).slice(0, Math.max(0, st.blockBudget))) placeBlock(st, k);
 
   return st;
 }
 
+/** 그 들어오는 쪽 가장자리에서부터 비어 있는 칸 수 */
+function fromLowFree(st, o) {
+  const { N, grid } = st;
+  let free = 0;
+  if (o.fromLow) {
+    for (let c = 0; c < N && grid[cellIdx(N, o.axis, o.lane, c)] === EMPTY; c++) free++;
+  } else {
+    for (let c = N - 1; c >= 0 && grid[cellIdx(N, o.axis, o.lane, c)] === EMPTY; c--) free++;
+  }
+  return free;
+}
+
+function centerSquare(N, size) {
+  const lo = Math.floor((N - size) / 2);
+  return { lo, hi: lo + size - 1 };
+}
+
+function inCenter(st, x, y) {
+  const c = st.center;
+  return !!c && x >= c.lo && x <= c.hi && y >= c.lo && y <= c.hi;
+}
+
+/** 차가 놓일 칸들이 구역 조건을 맞추는가 — 'center' 전부 안전구역 안 / 'outer' 하나도 안 걸침 / null 아무 데나 */
+function fitsRegion(st, axis, lane, pos, len, region) {
+  if (!region) return true;
+  for (let k = 0; k < len; k++) {
+    const x = axis === 'h' ? pos + k : lane;
+    const y = axis === 'h' ? lane : pos + k;
+    if (inCenter(st, x, y) !== (region === 'center')) return false;
+  }
+  return true;
+}
+
 /**
  * 들여보내기 — 들어갈 수 있는 자리를 전부 늘어놓고(많으면 일부만) 견줘, 가장 많이 가로막는 곳에 세운다.
  * ⚠️ 무작위로 몇 자리만 찍어 보면 판 끝물에 '지금 나갈 수 있는 차를 가리는 자리'를 거의 못 찾는다
+ * @param region 'center' | 'outer' | null — 하드 모드의 안전구역 안/밖 (fitsRegion)
+ * @param pack   빽빽한 판(하드 모드)용 채우기.
+ *   ★ 칸의 90%를 채우려면 '안에서 밖으로' 채워야 한다. 들여보내는 차는 가장자리에서 그 자리까지 길이 트여 있어야 하므로,
+ *     바깥을 먼저 막아 버리면 안쪽 빈칸은 영영 못 채운다. 그래서 판 가장자리에서 가장 먼(가장 안쪽 고리) 자리부터,
+ *     앞이 막힐 때까지 바짝 밀어 넣는다(빈칸을 사이에 남기지 않는다). 무작위로 견주던 방식은 100대에서 이미 반 넘게 실패했다
  */
-function insert(st, kind, rng, candidates) {
+function insert(st, kind, rng, candidates, region = null, pack = false) {
   const { N, grid } = st;
   const len = VEHICLE_LENGTH[kind];
   const before = countExitable(st);
@@ -239,11 +309,38 @@ function insert(st, kind, rng, candidates) {
         } else {
           for (let c = N - 1; c >= 0 && grid[cellIdx(N, axis, lane, c)] === EMPTY; c--) free++;
         }
-        for (let gap = 0; gap <= free - len; gap++) options.push({ axis, lane, fromLow, gap });
+        for (let gap = 0; gap <= free - len; gap++) {
+          if (fitsRegion(st, axis, lane, fromLow ? gap : N - len - gap, len, region)) options.push({ axis, lane, fromLow, gap });
+        }
       }
     }
   }
   rng.shuffle(options);
+
+  if (pack) {
+    let pick = null;
+    for (const o of options) {
+      const pos = o.fromLow ? o.gap : N - len - o.gap;
+      // 차가 차지할 칸들 중 가장자리에 가장 가까운 칸의 깊이 (고리 번호)
+      let depth = Infinity;
+      for (let k = 0; k < len; k++) {
+        const x = o.axis === 'h' ? pos + k : o.lane;
+        const y = o.axis === 'h' ? o.lane : pos + k;
+        depth = Math.min(depth, x, y, N - 1 - x, N - 1 - y);
+      }
+      const inner = fromLowFree(st, o) - len === o.gap;   // 안쪽 끝이 무언가에 붙었다 (사이 빈칸 없음)
+      const score = depth * 4 + (inner ? 2 : 0) + rng.next();
+      if (!pick || score > pick.score) pick = { ...o, pos, score };
+    }
+    if (!pick) return false;
+    const i = st.vs.length;
+    const v = { kind, len, axis: pick.axis, lane: pick.lane, p: pick.pos };
+    st.vs.push(v);
+    fill(st, i, i + 1);
+    touchVehicle(st, v);
+    touchPath(st, v, pick.fromLow ? -1 : +1);
+    return true;
+  }
 
   for (const { axis, lane, fromLow, gap } of options.slice(0, candidates)) {
     const pos = fromLow ? gap : N - len - gap;
@@ -278,6 +375,7 @@ function pull(st, rng) {
   const options = [];
   for (let i = 0; i < vs.length; i++) {
     const v = vs[i];
+    if (v.kind === 'limo') continue;   // 리무진은 안전구역에 둔 그대로
     for (let d = -1; d <= 1; d += 2) {
       const beyond = d > 0 ? v.p + v.len : v.p - 1;
       if (beyond < 0 || beyond >= N || grid[cellIdx(N, v.axis, v.lane, beyond)] === EMPTY) continue;
@@ -289,7 +387,10 @@ function pull(st, rng) {
         free++;
       }
       if (reachesEdge) continue;
-      for (let k = 1; k <= free; k++) options.push({ i, pos: v.p - d * k });
+      for (let k = 1; k <= free; k++) {
+        const pos = v.p - d * k;
+        if (fitsRegion(st, v.axis, v.lane, pos, v.len, st.center ? 'outer' : null)) options.push({ i, pos });
+      }
     }
   }
   if (options.length === 0) return false;

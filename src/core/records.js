@@ -68,10 +68,17 @@ export function formatTime(ms) {
 //   판을 열자마자 나가는 것은 시도로 치지 않는다 (아직 아무것도 안 했다).
 
 export const HARD_RECENT_LIMIT = 10;
+
+/**
+ * 하드 모드 규칙 판 — 규칙이 바뀌어 예전 기록과 견줄 수 없게 되면 올린다. 저장된 기록의 판이 다르면 불러올 때 비운다.
+ *   1: 25×25 · 안전구역 5×5 · 모든 차를 빼면 클리어
+ *   2: 안전구역 7×7 · 차량 200대 · 리무진 2대를 빼면 클리어 · 100점 점수제 (2026-10-12)
+ */
+export const HARD_RULES_VERSION = 2;
 export const HardResult = Object.freeze({ PLAYING: 'playing', CLEAR: 'clear', QUIT: 'quit', STUCK: 'stuck' });
 
 export function emptyHardRecord() {
-  return { plays: 0, clears: 0, bestScore: null, bestTime: null, bestMoves: null, recent: [], nextId: 1 };
+  return { rules: HARD_RULES_VERSION, plays: 0, clears: 0, bestScore: null, bestTime: null, bestMoves: null, recent: [], nextId: 1 };
 }
 
 /**

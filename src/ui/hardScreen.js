@@ -87,7 +87,7 @@ export class HardScreen {
     this.$('hard-seed').textContent = seed;
     this.$('hard-sub').textContent = `시드 ${seed}`;
     this.renderer.setPuzzle(null, []);
-    this.setStats({ left: '–', moves: '–', time: '0:00', countdown: '–', random: '–', score: '–' });
+    this.setStats({ left: '–', moves: '–', time: '0:00', countdown: '–', score: '–', limos: '–' });
     this.showOverlay('loading');
   }
 
@@ -184,10 +184,12 @@ export class HardScreen {
     this.lastRandom = r.random;
     this.updateHud();
     const n = r.random.moves.length;
+    const limoOut = r.move.exits && this.session.puzzle.vehicles[r.move.vehicle].kind === 'limo';
     const parts = [n > 0 ? `이번 턴 ${n}대 이동` : '움직일 수 있는 차가 없어 랜덤 이동 없음'];
+    if (limoOut) parts.unshift(`👑 리무진 탈출! (${this.session.limosOut}/${this.session.limosTotal})`);
     if (r.spawned) parts.push('새 차량 도착!');
     else if (r.countdownStarted) parts.push(`${r.countdown}턴 뒤 새 차량`);
-    this.toast(parts.join(' · '), !!r.spawned);
+    this.toast(parts.join(' · '), !!r.spawned || limoOut);
     this.announce(`${parts.join('. ')}. 남은 차량 ${this.session.remaining}대`);
 
     if (this.session.status === HardStatus.STUCK) {
@@ -296,8 +298,8 @@ export class HardScreen {
       moves: String(s.moveCount),
       time: formatTime(this.elapsed()),
       countdown: cd == null ? '없음' : `${cd}턴 뒤`,
-      random: this.lastRandom ? `${this.lastRandom.moves.length}대` : '–',
       score: `${s.expectedScore}점`,
+      limos: `${s.limosOut}/${s.limosTotal}`,
     });
     this.$('hard-countdown').closest('.stat').classList.toggle('alert', cd != null && cd <= 1);
     this.$('hard-undo-count').textContent = s.undoCount > 0 ? `되돌림 ${s.undoCount}` : '';
@@ -305,13 +307,13 @@ export class HardScreen {
     this.root.querySelector('.game-actions [data-action="undo"]').disabled = !s.canUndo;
   }
 
-  setStats({ left, moves, time, countdown, random, score }) {
+  setStats({ left, moves, time, countdown, score, limos }) {
     this.$('hard-left').textContent = left;
     this.$('hard-moves').textContent = moves;
     this.$('hard-time').textContent = time;
     this.$('hard-countdown').textContent = countdown;
-    this.$('hard-random').textContent = random;
     this.$('hard-score').textContent = score;
+    this.$('hard-limos').textContent = limos;
   }
 
   toast(text, hot = false) {

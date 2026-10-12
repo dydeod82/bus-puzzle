@@ -3,9 +3,13 @@
 //   1) 변화구역의 랜덤 이동 — 플레이어가 차를 실제로 움직일 때마다, 그 직후 변화구역의 차 1~4대가 저절로 움직인다
 //   2) 새 차량 도착 — 차가 판 밖으로 나가면 카운트다운(3턴)이 시작되고, 끝나면 변화구역에 차 한 대가 새로 놓인다
 //
-// 구역: 정중앙 safeSize×safeSize가 안전구역, 나머지 전부가 변화구역 (25 = 10 + 5 + 10).
+// 구역: 정중앙 safeSize×safeSize가 안전구역, 나머지 전부가 변화구역 (25 = 9 + 7 + 9).
 //   랜덤 이동은 '모든 칸이 변화구역에 있는 차'만 고르고, 판 끝과 안전구역 경계 앞에서 멈춘다.
 //   플레이어의 이동은 일반 규칙 그대로다 — 안전구역도 지나가고 판 밖으로도 나간다.
+//
+// ★ 리무진(kind 'limo'): 안전구역에서 시작한다. 플레이어만 움직일 수 있고(랜덤 이동 대상이 아니다 — 변화구역에 나가 있어도),
+//   리무진을 모두 판 밖으로 빼면 클리어다. 일반 차는 남아 있어도 된다. 리무진의 탈출도 탈출이라 카운트다운을 시작시킨다.
+//   리무진이 없는 판(테스트의 작은 판)은 예전처럼 모든 차를 빼야 클리어다.
 //
 // ★ 난수 상태(숫자 4개)도 게임 상태에 들어 있다. 되돌리기는 상태 통째로 되돌리므로
 //   같은 수를 다시 두면 같은 랜덤 결과가 나온다.
@@ -20,7 +24,7 @@
 
 import { createRng, rngFromState } from './random.js';
 import {
-  EXITED, EMPTY, OFF_BOARD, VEHICLE_LENGTH, buildGrid, travel, getMove, applyMove, remainingCount, withVehicle,
+  EXITED, EMPTY, BLOCK, OFF_BOARD, VEHICLE_LENGTH, buildGrid, travel, getMove, applyMove, remainingCount, withVehicle,
 } from './rules.js';
 import { generatePuzzle } from './generator.js';
 import { HARD_MODE } from './levels.js';
@@ -81,7 +85,8 @@ export function randomTravel(puzzle, grid, zone, pos, i, sign) {
 export function randomMovable(puzzle, grid, zone, pos, exclude) {
   const out = [];
   for (let i = 0; i < puzzle.vehicles.length; i++) {
-    if (pos[i] === EXITED || exclude?.has(i) || !inChangeZone(puzzle, zone, i, pos[i])) continue;
+    if (pos[i] === EXITED || exclude?.has(i) || puzzle.vehicles[i].kind === 'limo') continue;   // 리무진은 플레이어만
+    if (!inChangeZone(puzzle, zone, i, pos[i])) continue;
     if (randomTravel(puzzle, grid, zone, pos, i, -1) > 0 || randomTravel(puzzle, grid, zone, pos, i, 1) > 0) out.push(i);
   }
   return out;
@@ -179,15 +184,24 @@ export function spawnVehicle(puzzle, zone, pos, rng, config) {
 export const HardStuck = Object.freeze({ OK: 'ok', STUCK: 'stuck', UNKNOWN: 'unknown' });
 
 /**
- * 막힘 — "남은 차 중 어느 것도 나갈 수 없고, 랜덤 이동으로도 상황이 바뀔 수 없다".
+ * 막힘 — "리무진이 더 이상 탈출할 방법이 없다" (리무진이 없는 판은 "어느 차도 나갈 수 없다").
+ *   - 남은 리무진 중 하나라도 자기 차선 양쪽에 구조물이 있으면 영영 못 나간다 → 막힘 (구조물은 움직이지 않는다)
  *   - 카운트다운 중이면 막힌 것이 아니다 (새 차가 온다 → 판이 바뀐다)
  *   - 플레이어가 미끄러뜨리기만으로 닿는 상태들을 훑어, 어디서든 나갈 차가 보이면 막힌 것이 아니다
+ *     (리무진이 아닌 차가 나가도 길이 넓어지고 카운트다운이 돌아 판이 바뀐다)
  *   - 플레이어가 한 수를 두면 바로 랜덤 이동이 따라온다. 그 뒤에 움직일 수 있는 차가 하나라도 있으면
  *     판이 바뀔 수 있으므로 막힌 것이 아니다
- *   ⚠️ 그래서 실제로 막히는 경우는 거의 '플레이어가 아무 차도 못 움직이는 판'뿐이다 (랜덤 이동은 플레이어 이동 뒤에만 온다)
+ *   ⚠️ 그래서 리무진 차선이 막힌 경우 말고는, 실제로 막히는 경우가 거의 '플레이어가 아무 차도 못 움직이는 판'뿐이다
+ * @param targets 탈출시켜야 할 차 번호 (리무진). 비었으면 모든 차
  */
-export function checkHardStuck(puzzle, zone, pos, countdown, { maxStates = 3000 } = {}) {
-  if (remainingCount(pos) === 0 || countdown !== null) return HardStuck.OK;
+export function checkHardStuck(puzzle, zone, pos, countdown, { maxStates = 3000, targets = [] } = {}) {
+  const goal = targets.length > 0 ? targets.filter((i) => pos[i] !== EXITED) : null;
+  if (goal ? goal.length === 0 : remainingCount(pos) === 0) return HardStuck.OK;
+
+  const grid0 = buildGrid(puzzle, pos);
+  if (goal && goal.some((i) => laneDead(puzzle, grid0, pos, i))) return HardStuck.STUCK;
+  if (countdown !== null) return HardStuck.OK;
+
   const n = puzzle.vehicles.length;
   const grid = new Int16Array(puzzle.size * puzzle.size);
   const seen = new Set([pos.join(',')]);
@@ -220,6 +234,23 @@ export function checkHardStuck(puzzle, zone, pos, countdown, { maxStates = 3000 
   return HardStuck.STUCK;
 }
 
+/** i번 차의 차선 양쪽 길에 구조물이 있는가 — 그러면 그 차는 영영 판 밖으로 못 나간다 */
+export function laneDead(puzzle, grid, pos, i) {
+  const v = puzzle.vehicles[i];
+  const N = puzzle.size;
+  let dead = 0;
+  for (let s = -1; s <= 1; s += 2) {
+    for (let c = s > 0 ? pos[i] + v.len : pos[i] - 1; c >= 0 && c < N; c += s) {
+      const [x, y] = cellXY(v, c);
+      if (grid[y * N + x] === BLOCK) {
+        dead++;
+        break;
+      }
+    }
+  }
+  return dead === 2;
+}
+
 // ── 한 판 진행 ───────────────────────────────────────────
 
 /**
@@ -238,6 +269,8 @@ export class HardSession {
     this.seed = String(seed);
     this.zone = zoneLayout(puzzle.size, config.safeSize);
     this.stuckSearchLimit = stuckSearchLimit;
+    // 탈출시켜야 할 차 — 리무진 (시작 판에만 있다. 새로 오는 차는 일반 차뿐)
+    this.limoIds = puzzle.vehicles.filter((v) => v.kind === 'limo').map((v) => v.id);
     this.initial = Object.freeze({
       puzzle,
       pos: puzzle.start.slice(),
@@ -296,6 +329,20 @@ export class HardSession {
     return this.state.countdown;
   }
 
+  /** 리무진 수와 그중 나간 수 (리무진이 없는 판은 0/0) */
+  get limosTotal() {
+    return this.limoIds.length;
+  }
+
+  get limosOut() {
+    return this.limoIds.filter((i) => this.state.pos[i] === EXITED).length;
+  }
+
+  /** 클리어인가 — 리무진이 있으면 리무진이 모두 나갔는가, 없으면 판이 비었는가 */
+  isCleared(pos = this.state.pos) {
+    return this.limoIds.length > 0 ? this.limoIds.every((i) => pos[i] === EXITED) : remainingCount(pos) === 0;
+  }
+
   preview(i, sign) {
     return getMove(this.state.puzzle, this.state.pos, i, sign);
   }
@@ -320,8 +367,8 @@ export class HardSession {
     let pos = applyMove(s0.pos, m);
     const turn = s0.turn + 1;
 
-    // ① 판이 비면 즉시 클리어 — 진행 중이던 카운트다운은 취소
-    if (remainingCount(pos) === 0) {
+    // ① 리무진이 모두 나갔으면(리무진 없는 판은 판이 비면) 즉시 클리어 — 진행 중이던 카운트다운은 취소
+    if (this.isCleared(pos)) {
       this.state = Object.freeze({ puzzle, pos, rng: rng.getState(), countdown: null, turn });
       this.status = HardStatus.CLEARED;
       return {
@@ -384,8 +431,8 @@ export class HardSession {
 
   #evaluate() {
     const { puzzle, pos, countdown } = this.state;
-    if (remainingCount(pos) === 0) return HardStatus.CLEARED;
-    const r = checkHardStuck(puzzle, this.zone, pos, countdown, { maxStates: this.stuckSearchLimit });
+    if (this.isCleared(pos)) return HardStatus.CLEARED;
+    const r = checkHardStuck(puzzle, this.zone, pos, countdown, { maxStates: this.stuckSearchLimit, targets: this.limoIds });
     return r === HardStuck.STUCK ? HardStatus.STUCK : HardStatus.PLAYING;
   }
 }
@@ -424,24 +471,38 @@ export function describeHardScore(cfg = HARD_MODE.score) {
 
 // ── 판 만들기 ───────────────────────────────────────────
 
-/** HARD_MODE 설정 → 생성기 설정. 랜덤 이동이 있으니 '밀어 두기 고리'는 넣지 않는다 */
+/**
+ * HARD_MODE 설정 → 생성기 설정.
+ *   - 일반 차·구조물은 변화구역에만, 리무진은 안전구역에 (generator의 safeSize·limos)
+ *   - 칸의 90%를 채우므로 '안에서 밖으로 바짝' 채우는 방식(pack)을 쓰고, 구조물은 안전구역에 붙여 두른다 (blockBand)
+ *   - 바로 나갈 수 있는 차 수 조건은 두지 않는다 — 이 밀도에서는 가장자리 줄의 차가 대부분 바로 나갈 수 있다
+ *   - 랜덤 이동이 있으니 '밀어 두기 고리'는 넣지 않는다
+ */
 export function hardPuzzleParams(config = HARD_MODE) {
   const buses = Math.round(config.startVehicles * config.busRatio);
+  const lo = (config.size - config.safeSize) / 2;   // 안전구역이 시작하는 고리 번호
   return {
     size: config.size,
     cars: config.startVehicles - buses,
     buses,
     blocks: config.blocks,
+    safeSize: config.safeSize,
+    limos: config.limos ?? 0,
+    goal: 'limo',
+    pack: true,
+    blockDepth: config.blockBand ? [Math.max(0, lo - config.blockBand), lo - 1] : null,
     minSlides: 0,
     maxSlides: 99,
     loops: 0,
-    maxExitable: config.maxExitable,
+    repairPulls: 0,
+    maxExitable: 9999,
+    attempts: 60,
   };
 }
 
 /**
- * 하드 모드 판. 랜덤 요소 때문에 풀이를 보장할 수는 없으므로 "랜덤 이동이 없다고 가정하면 풀리는 판"만 만든다
- * (생성기가 솔버로 확인하고, 못 풀면 다시 짓는다).
+ * 하드 모드 판. 랜덤 요소 때문에 풀이를 보장할 수는 없으므로 "랜덤 이동이 없다고 가정하면 리무진을 모두 뺄 수 있는 판"만
+ * 만든다 (생성기가 솔버로 확인하고, 못 풀면 다시 짓는다).
  */
 export function generateHardPuzzle(seed, config = HARD_MODE) {
   return generatePuzzle(hardPuzzleParams(config), `hard:${seed}`);

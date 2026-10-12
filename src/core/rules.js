@@ -19,7 +19,8 @@ export const BLOCK = -1;
 // 경로가 판 끝까지 비어 있을 때 travel()이 돌려주는 값
 export const OFF_BOARD = Infinity;
 
-export const VEHICLE_LENGTH = Object.freeze({ car: 2, bus: 3 });
+// limo — 하드 모드의 리무진 (2칸). 규칙은 자동차와 같고, 랜덤 이동 제외·클리어 조건은 하드 모드 규칙이 정한다
+export const VEHICLE_LENGTH = Object.freeze({ car: 2, bus: 3, limo: 2 });
 
 export const DIRECTIONS = Object.freeze({
   left: Object.freeze({ axis: 'h', sign: -1 }),

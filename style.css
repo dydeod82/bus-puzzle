@@ -252,6 +252,21 @@ kbd { font-family: var(--body); font-size: .8em; padding: 1px 6px; border-radius
 .screen-hard .game-heading h2 { color: #ff9f70; }
 .stats-hard { grid-template-columns: repeat(6, 1fr); gap: 4px; padding: 8px 6px; }
 .stats-hard .stat-score dd { color: #7cf0c8; text-shadow: 0 0 10px rgba(80,230,180,.45); }
+.stats-hard .stat-limo dt { color: #f3c64a; }
+.stats-hard .stat-limo dd { color: #ffd76a; text-shadow: 0 0 10px rgba(243,198,74,.55); }
+/* 하드 모드 안내문 (시작 안내 · 규칙 창) */
+.hard-guide h3 { margin: 0 0 6px; font-family: var(--display); font-weight: 400; font-size: 24px; color: #ffd76a; }
+.hard-guide-lead { margin: 0 0 10px; font-weight: 700; }
+.hard-guide ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; line-height: 1.6; }
+.hard-guide li::before { content: '·'; color: #f3c64a; font-weight: 700; margin-right: 8px; }
+.rules-hard-extra { margin: 10px 0 0; font-size: 13px; color: var(--dim); line-height: 1.7; }
+.rules-hard-extra strong { color: #ff9f70; margin-right: 4px; }
+.intro { width: min(460px, calc(100% - 24px)); padding: 0; border: 2px solid #f3c64a; border-radius: 20px; background: var(--plate); color: var(--ink); box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+.intro::backdrop { background: rgba(0,0,0,.65); }
+.intro-inner { padding: 22px; display: grid; gap: 16px; }
+.intro-hide { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 14px; cursor: pointer; }
+.intro-hide input { width: 18px; height: 18px; accent-color: #f3c64a; }
+.legend-icon.limo { background: #16141c; color: #f3c64a; border: 2px solid #f3c64a; width: 34px; font-size: 12px; }
 .result-score { margin: 4px 0 12px; display: flex; align-items: baseline; justify-content: center; gap: 4px; color: #26221a; }
 .result-score strong { font-family: var(--display); font-weight: 400; font-size: 64px; line-height: 1; color: #c47a00; }
 .result-score span { font-weight: 700; font-size: 22px; }

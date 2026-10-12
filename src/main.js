@@ -31,6 +31,29 @@ const freeUnlocked = () => Boolean(save.records[LEVEL_COUNT]);
 const rules = new RulesDialog(document.getElementById('rules'));
 document.getElementById('rules-hard-score').textContent = describeHardScore(HARD_MODE.score);
 
+// 하드 모드 안내문 — 시작 안내 창과 규칙 창이 같은 글을 쓴다 (한 곳에서만 고치면 되도록 template 하나에서 복제)
+const guideTpl = document.getElementById('hard-guide-tpl');
+for (const slot of document.querySelectorAll('[data-hard-guide]')) slot.replaceChildren(guideTpl.content.cloneNode(true));
+
+const intro = document.getElementById('hard-intro');
+intro.addEventListener('click', (e) => {
+  if (e.target.closest('[data-action="intro-close"]')) intro.close();
+});
+// '다음부터 안 보기'는 체크하는 순간 저장한다.
+// ⚠️ 창의 close 이벤트에 기대지 말 것 — 브라우저에 따라 close 이벤트가 화면을 다시 그릴 때까지 미뤄진다 (뒤에 깔린 탭에서 실제로 안 왔다)
+document.getElementById('hard-intro-hide').addEventListener('change', (e) => {
+  save.settings.hideHardIntro = e.target.checked;
+  writeSave(save);
+});
+intro.addEventListener('close', () => hard.canvas.focus({ preventScroll: true }));
+
+/** 하드 모드에 들어올 때의 안내 — '다음부터 안 보기'를 고르기 전까지 매번 */
+function showHardIntro() {
+  if (save.settings.hideHardIntro || intro.open) return;
+  document.getElementById('hard-intro-hide').checked = false;
+  intro.showModal();
+}
+
 const game = new GameScreen(screens.el('game'), {
   onClear: (run) => finishPlay(run),
   onExit: () => screens.show(play?.mode === 'free' ? 'free' : 'levels'),
@@ -56,7 +79,7 @@ const hard = new HardScreen(screens.el('hard'), {
   },
 });
 
-const recordsUi = setupRecords(screens.el('records'), { onPlaySeed: (seed) => playHard(seed) });
+const recordsUi = setupRecords(screens.el('records'), { onPlaySeed: (seed) => playHard(seed, { entering: true }) });
 
 const free = new FreeModeScreen(screens.el('free'), {
   onChange: (s) => {
@@ -83,7 +106,7 @@ app.addEventListener('click', (e) => {
   if (!btn || btn.disabled) return;
   switch (btn.dataset.action) {
     case 'start': screens.show('levels'); break;
-    case 'hard': playHard(randomSeedString()); break;
+    case 'hard': playHard(randomSeedString(), { entering: true }); break;
     case 'records': screens.show('records'); break;
     case 'free': if (freeUnlocked()) screens.show('free'); break;
     case 'rules-open': rules.open(); break;
@@ -149,14 +172,15 @@ async function startPuzzle(params, seed, title, subtitleOf) {
 }
 
 /**
- * 하드 모드 — 시작할 때마다 새 시드 (시드를 넣으면 그 판).
+ * 하드 모드 — 시작할 때마다 새 시드 (시드를 넣으면 그 판). 바깥(시작 화면·기록)에서 들어올 때만 안내를 띄운다 (entering).
  * ⚠️ 판 생성 시드는 generateHardPuzzle과 똑같이 `hard:${seed}`로 넘긴다 — 다르면 같은 시드라도 Node(테스트)와 화면의 판이 갈린다
  */
-async function playHard(seed) {
+async function playHard(seed, { entering = false } = {}) {
   const token = ++loadToken;
   play = { mode: 'hard', seed };
   screens.show('hard');
   hard.showLoading(seed);
+  if (entering) showHardIntro();   // 판을 만드는 동안 안내를 읽는다
   try {
     const data = await loadPuzzle(hardPuzzleParams(HARD_MODE), `hard:${seed}`);
     if (token !== loadToken || screens.current !== 'hard') return;

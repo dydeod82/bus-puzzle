@@ -98,3 +98,21 @@ test('하드 기록: 일반 기록과 따로 저장되고, 깨진 값은 걸러�
   writeSave({ unlocked: 1, records: {}, free: {} });        // 하드 기록이 없던 옛 저장
   assert.deepEqual(loadSave(10).hard, emptyHardRecord());
 });
+
+test('하드 기록: 규칙이 바뀌기 전(규칙 판 없음·1판)의 기록은 불러올 때 비운다 — 일반 기록은 그대로', () => {
+  const rec = { clears: 1, stars: 2, par: 8, bestMoves: { moves: 9, undos: 0, timeMs: 5000 }, bestTime: { moves: 9, undos: 0, timeMs: 5000 } };
+  const old = { plays: 7, clears: 3, bestTime: { timeMs: 1, moves: 1, undos: 0, seed: 'X' }, bestMoves: null, recent: [], nextId: 8 };
+  writeSave({ unlocked: 3, records: { 2: rec }, free: {}, hard: old });
+  const back = loadSave(10);
+  assert.deepEqual(back.hard, emptyHardRecord());
+  assert.deepEqual(back.records, { 2: rec });
+  writeSave({ unlocked: 3, records: {}, free: {}, hard: { ...old, rules: 1 } });
+  assert.deepEqual(loadSave(10).hard, emptyHardRecord());
+});
+
+test('설정: 하드 모드 안내 \'다음부터 안 보기\'가 저장된다', () => {
+  writeSave({ unlocked: 1, records: {}, free: {}, settings: { hideHardIntro: true } });
+  assert.equal(loadSave(10).settings.hideHardIntro, true);
+  writeSave({ unlocked: 1, records: {}, free: {} });
+  assert.equal(loadSave(10).settings.hideHardIntro, false);
+});

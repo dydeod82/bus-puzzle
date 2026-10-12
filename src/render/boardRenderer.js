@@ -38,6 +38,10 @@ const COLORS = {
   // 강조
   random: '#ff9f43',
   spawn: '#4dd4ff',
+  // 리무진
+  limo: '#16141c',
+  limoGold: '#f3c64a',
+  limoGlass: '#3a4150',
 };
 
 export const HIGHLIGHT = Object.freeze({ RANDOM: COLORS.random, SPAWN: COLORS.spawn });
@@ -625,6 +629,7 @@ export class BoardRenderer {
 
     if (exiting) drawSpeedLines(ctx, L, W, cs);
     if (v.kind === 'bus') drawBus(ctx, L, W, cs);
+    else if (v.kind === 'limo') drawLimo(ctx, L, W, cs);
     else drawCar(ctx, L, W, cs, COLORS.cars[i % COLORS.cars.length]);
 
     // 키보드 선택
@@ -830,6 +835,88 @@ function drawBus(ctx, L, W, cs) {
   // 방향 표시 »
   drawChevron(ctx, x0 + bw * 0.72, 0, cs * 0.13, 'rgba(60,40,0,0.55)', cs);
   drawChevron(ctx, x0 + bw * 0.8, 0, cs * 0.13, 'rgba(60,40,0,0.55)', cs);
+}
+
+/**
+ * 리무진 — 검은 차체에 금색 테두리, 지붕에 금색 왕관. 일반 차(여러 색)·버스(노랑)와 한눈에 갈리게.
+ * 금빛 번짐을 둘러 판에 차가 200대 있어도 리무진이 어디 있는지 바로 보이게 한다.
+ * ⚠️ 번짐을 깜빡이게 하지 말 것 — 그러면 판 전체(차 200대)를 매 프레임 다시 그려야 해 휴대폰이 뜨거워진다
+ */
+function drawLimo(ctx, L, W, cs) {
+  const pad = cs * 0.08;
+  const x0 = -L / 2 + pad;
+  const y0 = -W / 2 + pad;
+  const bw = L - pad * 2;
+  const bh = W - pad * 2;
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(255,205,80,0.65)';
+  ctx.shadowBlur = cs * 0.45;
+  roundRect(ctx, x0, y0, bw, bh, cs * 0.2);
+  ctx.fillStyle = COLORS.limo;
+  ctx.fill();
+  ctx.restore();
+
+  // 광택
+  const g = ctx.createLinearGradient(0, y0, 0, y0 + bh);
+  g.addColorStop(0, 'rgba(255,255,255,0.18)');
+  g.addColorStop(0.45, 'rgba(255,255,255,0)');
+  g.addColorStop(1, 'rgba(0,0,0,0.3)');
+  roundRect(ctx, x0, y0, bw, bh, cs * 0.2);
+  ctx.fillStyle = g;
+  ctx.fill();
+
+  // 금색 테두리
+  ctx.lineWidth = Math.max(1.5, cs * 0.06);
+  ctx.strokeStyle = COLORS.limoGold;
+  roundRect(ctx, x0 + cs * 0.03, y0 + cs * 0.03, bw - cs * 0.06, bh - cs * 0.06, cs * 0.17);
+  ctx.stroke();
+
+  // 짙은 창 (앞·뒤)
+  ctx.fillStyle = COLORS.limoGlass;
+  roundRect(ctx, x0 + bw * 0.66, y0 + bh * 0.2, bw * 0.12, bh * 0.6, cs * 0.06);
+  ctx.fill();
+  roundRect(ctx, x0 + bw * 0.12, y0 + bh * 0.22, bw * 0.09, bh * 0.56, cs * 0.05);
+  ctx.fill();
+
+  // 전조등 · 후미등
+  ctx.fillStyle = COLORS.headlight;
+  ctx.fillRect(x0 + bw - cs * 0.06, y0 + bh * 0.1, cs * 0.045, bh * 0.18);
+  ctx.fillRect(x0 + bw - cs * 0.06, y0 + bh * 0.72, cs * 0.045, bh * 0.18);
+  ctx.fillStyle = COLORS.taillight;
+  ctx.fillRect(x0 + cs * 0.015, y0 + bh * 0.12, cs * 0.04, bh * 0.16);
+  ctx.fillRect(x0 + cs * 0.015, y0 + bh * 0.72, cs * 0.04, bh * 0.16);
+
+  // 왕관 — 지붕 가운데 (회전해도 차 방향을 따라간다: 왕관 꼭대기가 앞쪽)
+  drawCrown(ctx, x0 + bw * 0.42, 0, cs * 0.3);
+}
+
+/** 금색 왕관 (오른쪽이 꼭대기) — 가운데 (x, y), 크기 s */
+function drawCrown(ctx, x, y, s) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(Math.PI / 2);   // 위를 향한 왕관을 그리고 → 차의 앞쪽(오른쪽)으로 눕힌다
+  ctx.beginPath();
+  ctx.moveTo(-s, s * 0.55);
+  ctx.lineTo(-s, -s * 0.15);
+  ctx.lineTo(-s * 0.5, s * 0.15);
+  ctx.lineTo(0, -s * 0.6);
+  ctx.lineTo(s * 0.5, s * 0.15);
+  ctx.lineTo(s, -s * 0.15);
+  ctx.lineTo(s, s * 0.55);
+  ctx.closePath();
+  ctx.fillStyle = COLORS.limoGold;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1, s * 0.12);
+  ctx.strokeStyle = 'rgba(90,60,0,0.8)';
+  ctx.stroke();
+  ctx.fillStyle = '#fff3c4';
+  for (const [cx, cy] of [[-s, -s * 0.15], [0, -s * 0.6], [s, -s * 0.15]]) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, s * 0.16, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function drawChevron(ctx, x, y, s, color, cs) {

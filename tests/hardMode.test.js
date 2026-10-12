@@ -10,10 +10,18 @@ import { createRng } from '../src/core/random.js';
 import {
   EXITED, EMPTY, OFF_BOARD, buildGrid, createPuzzle, getMove, applyMove, isCleared, listMoves, travel, vehicleCells,
 } from '../src/core/rules.js';
+import { parseTextBoard } from '../src/core/textBoard.js';
 import { board, idOf } from './helpers.js';
 
 /** 작은 판으로 시험할 때의 설정 (9×9, 가운데 3×3이 안전구역) */
 const SMALL = { ...HARD_MODE, size: 9, safeSize: 3 };
+
+/** 글자 그림 판에서 labels의 차를 리무진으로 바꾼다 (글자 그림은 칸 수로 자동차·버스만 가른다) */
+function limoBoard(text, labels) {
+  const def = parseTextBoard(text);
+  for (const v of def.vehicles) if (labels.includes(v.label)) v.kind = 'limo';
+  return createPuzzle(def);
+}
 
 /** 하드 모드 판 하나를 아무렇게나(시드 고정) 두며 매 턴 결과를 넘겨준다 */
 function playRandomly(session, turns, seed, onTurn) {
@@ -36,29 +44,46 @@ const hardBoards = ['T1', 'T2', 'T3'].map((seed) => {
 
 // ── 구역 ────────────────────────────────────────────────
 
-test('구역: 25×25에서 안전구역은 정중앙 5×5(10~14), 나머지는 변화구역', () => {
-  const z = zoneLayout(25, 5);
-  assert.deepEqual([z.lo, z.hi], [10, 14]);
-  assert.equal(isSafeCell(z, 10, 10), true);
-  assert.equal(isSafeCell(z, 14, 14), true);
-  assert.equal(isSafeCell(z, 9, 12), false);
-  assert.equal(isSafeCell(z, 12, 15), false);
+test('구역: 25×25에서 안전구역은 정중앙 7×7(9~15), 바깥 9칸이 변화구역 (25 = 9 + 7 + 9)', () => {
+  const z = zoneLayout(25, 7);
+  assert.deepEqual([z.lo, z.hi], [9, 15]);
+  assert.deepEqual([HARD_MODE.size, HARD_MODE.safeSize], [25, 7]);
+  assert.equal(isSafeCell(z, 9, 9), true);
+  assert.equal(isSafeCell(z, 15, 15), true);
+  assert.equal(isSafeCell(z, 12, 9), true);
+  assert.equal(isSafeCell(z, 8, 12), false, '안전구역 바로 왼쪽 칸은 변화구역');
+  assert.equal(isSafeCell(z, 12, 16), false, '안전구역 바로 아래 칸은 변화구역');
   assert.equal(isSafeCell(z, 0, 0), false);
   assert.throws(() => zoneLayout(25, 4), /짝수/);
 });
 
 // ── 판 생성 ─────────────────────────────────────────────
 
-test('판 생성: 25×25, 설정대로의 차량·구조물, 랜덤 이동이 없다면 풀린다', () => {
+test('판 생성: 일반 차 200대(버스 30%)는 변화구역에만, 리무진 2대는 안전구역에, 랜덤 이동이 없다면 리무진을 모두 뺄 수 있다', () => {
   const p = hardPuzzleParams();
+  const z = zoneLayout(25, 7);
   for (const { g, puzzle } of hardBoards) {
+    const regular = puzzle.vehicles.filter((v) => v.kind !== 'limo');
+    const limos = puzzle.vehicles.filter((v) => v.kind === 'limo');
     assert.equal(puzzle.size, 25);
-    assert.equal(puzzle.vehicles.length, HARD_MODE.startVehicles);
-    assert.equal(puzzle.vehicles.filter((v) => v.kind === 'bus').length, p.buses);
+    assert.equal(regular.length, HARD_MODE.startVehicles);
+    assert.equal(HARD_MODE.startVehicles, 200);
+    assert.equal(regular.filter((v) => v.kind === 'bus').length, p.buses);
+    assert.equal(limos.length, 2);
     assert.equal(puzzle.blocks.length, HARD_MODE.blocks);
+    for (const v of puzzle.vehicles) {
+      const cells = vehicleCells(puzzle, v.id, puzzle.start[v.id]);
+      if (v.kind === 'limo') assert.ok(cells.every((c) => isSafeCell(z, c.x, c.y)), '리무진은 안전구역 안');
+      else assert.ok(cells.every((c) => !isSafeCell(z, c.x, c.y)), '일반 차는 변화구역에만');
+    }
+    // 솔버의 수순을 규칙 엔진으로 다시 둬서 리무진 두 대가 정말 나가는지 본다
     let pos = puzzle.start.slice();
-    for (const m of g.solution) pos = applyMove(pos, getMove(puzzle, pos, m.vehicle, m.sign));
-    assert.ok(isCleared(pos));
+    for (const m of g.solution) {
+      const move = getMove(puzzle, pos, m.vehicle, m.sign);
+      assert.ok(move?.moved);
+      pos = applyMove(pos, move);
+    }
+    assert.ok(limos.every((v) => pos[v.id] === EXITED));
   }
 });
 
@@ -106,6 +131,7 @@ test('랜덤 이동: 판 밖으로 나가지 않고, 안전구역에 들어가�
         assert.equal(pos[m.vehicle], m.from);
         pos[m.vehicle] = m.to;
         assert.notEqual(m.to, EXITED, '판 밖으로 나가지 않는다');
+        assert.notEqual(pz.vehicles[m.vehicle].kind, 'limo', '리무진은 랜덤으로 움직이지 않는다');
         const v = pz.vehicles[m.vehicle];
         for (const c of vehicleCells(pz, m.vehicle, m.to)) {
           assert.ok(c.x >= 0 && c.y >= 0 && c.x < pz.size && c.y < pz.size, '판 안');
@@ -235,6 +261,91 @@ test('클리어: 판이 비는 순간 클리어, 진행 중이던 카운트다�
   assert.equal(s.status, HardStatus.CLEARED);
   assert.equal(s.countdown, null);
   assert.equal(s.move(idOf(p, 'b'), 1), null);
+});
+
+// ── 리무진 ──────────────────────────────────────────────
+
+test('리무진: 변화구역에 나가 있어도 랜덤 이동 대상이 아니다', () => {
+  // k는 변화구역(맨 아래 줄)의 리무진, b는 일반 차 — 둘 다 오른쪽이 비어 있다
+  const p = limoBoard(`
+    . . . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .
+    b B . . . . . . .
+    . . . . . . . . .
+    k K . . . . . . .
+  `, ['k']);
+  const z = zoneLayout(9, 3);
+  assert.equal(p.vehicles[idOf(p, 'k')].kind, 'limo');
+  assert.deepEqual(randomMovable(p, buildGrid(p, p.start), z, p.start), [idOf(p, 'b')]);
+});
+
+// k: 안전구역의 가로 리무진 (오른쪽으로 나간다) · m: 안전구역의 세로 리무진 (아래로 나간다) · a: 일반 차
+const LIMOS = `
+  a A . . . . . . .
+  . . . . . . . . .
+  . . . . . . . . .
+  . . . k K . . . .
+  . . . . . m . . .
+  . . . . . M . . .
+  . . . . . . . . .
+  . . . . . . . . .
+  . . . . . . . . .
+`;
+
+test('리무진: 두 대를 모두 빼면 클리어 — 일반 차는 남아 있어도 된다, 리무진 탈출도 카운트다운을 시작시킨다', () => {
+  const p = limoBoard(LIMOS, ['k', 'm']);
+  const s = new HardSession(p, 'limo', SMALL);
+  assert.deepEqual([s.limosOut, s.limosTotal], [0, 2]);
+
+  const r1 = s.move(idOf(p, 'k'), 1);
+  assert.equal(r1.cleared, false);
+  assert.equal(r1.countdownStarted, true, '리무진 탈출도 탈출');
+  assert.deepEqual([s.limosOut, s.limosTotal], [1, 2]);
+  assert.equal(s.status, HardStatus.PLAYING);
+
+  const r2 = s.move(idOf(p, 'm'), 1);
+  assert.equal(r2.cleared, true);
+  assert.equal(s.status, HardStatus.CLEARED);
+  assert.equal(s.countdown, null, '진행 중이던 카운트다운 취소');
+  assert.notEqual(s.pos[idOf(p, 'a')], EXITED, '일반 차는 판에 남아 있다');
+  assert.deepEqual([s.limosOut, s.limosTotal], [2, 2]);
+});
+
+test('리무진: 차선 양쪽에 구조물이 있어 영영 못 나가면 막힘 (다른 차가 움직일 수 있어도)', () => {
+  const dead = limoBoard(`
+    a A . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .
+    . # . k K . . # .
+    . . . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .
+  `, ['k']);
+  const z = zoneLayout(9, 3);
+  const k = idOf(dead, 'k');
+  assert.equal(checkHardStuck(dead, z, dead.start, null, { targets: [k] }), HardStuck.STUCK);
+  assert.equal(checkHardStuck(dead, z, dead.start, 2, { targets: [k] }), HardStuck.STUCK, '새 차가 와도 리무진 길은 안 열린다');
+  assert.equal(new HardSession(dead, 'dead', SMALL).status, HardStatus.STUCK);
+
+  // 구조물이 한쪽에만 있으면 막힌 것이 아니다 (다른 쪽 길을 차가 막고 있어도 그 차는 비킬 수 있다)
+  const open = limoBoard(`
+    a A . . . . . . .
+    . . . . . . . . .
+    . . . . . . . b .
+    . # . k K . . B .
+    . . . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .
+    . . . . . . . . .
+  `, ['k']);
+  assert.equal(checkHardStuck(open, z, open.start, null, { targets: [idOf(open, 'k')] }), HardStuck.OK);
 });
 
 test('막힘: 아무 차도 못 움직이면 막힘, 카운트다운 중이거나 랜덤 이동이 판을 바꿀 수 있으면 아니다', () => {

@@ -150,6 +150,7 @@ class MinHeap {
 
 /**
  * @param startPos 시작 위치 (기본: 퍼즐의 처음 위치). 게임 도중의 위치를 넘겨도 된다
+ * @param options.goal   다 됐는지 판단하는 함수 (기본: 모든 차가 나갔다)
  * @param options.guided true(기본)면 '남은 차가 적은 상태'를 먼저 본다 — 큰 판에서도 빨리 답을 찾지만
  *        밀어 두기가 최소라는 보장은 없다. false면 밀어 두기 횟수 순서대로 훑어 그 안에서는 최소를 찾는다(느리다).
  * @returns {{ solved, moves, length, slides, explored, reason? }}
@@ -157,7 +158,9 @@ class MinHeap {
  *   length — 전체 이동 수 (= 목표 이동 수), slides — 그중 밀어 두기 수
  *   reason — 못 풀었을 때 'limit'(한도 초과) 또는 'exhausted'(더 볼 상태가 없음)
  */
-export function solve(puzzle, startPos = puzzle.start, { maxStates = 30000, guided = true } = {}) {
+export function solve(puzzle, startPos = puzzle.start, { maxStates = 30000, guided = true, goal = null } = {}) {
+  // goal(pos) — 이 상태면 다 된 것인가 (기본: 판이 비었다). 하드 모드는 '리무진이 모두 나갔다'를 넘긴다
+  const done = goal ?? ((pos) => countRemaining(pos) === 0);
   const { size, vehicles } = puzzle;
   const n = vehicles.length;
   const grid = new Int16Array(size * size);
@@ -180,7 +183,7 @@ export function solve(puzzle, startPos = puzzle.start, { maxStates = 30000, guid
     return { solved: true, moves, length: moves.length, slides: depth[idx], explored: states.length };
   };
 
-  if (countRemaining(root) === 0) return finish(0);
+  if (done(root)) return finish(0);
 
   // 우선순위: 밀어 두기 수 (+ guided면 남은 차 수). 밀어 두기 한 번으로 고리 하나가 풀리면 남은 차가 확 줄어든다
   const priority = (idx, remaining) => (guided ? depth[idx] + remaining : depth[idx]);
@@ -216,7 +219,7 @@ export function solve(puzzle, startPos = puzzle.start, { maxStates = 30000, guid
         const idx = states.length - 1;
 
         const remaining = countRemaining(next);
-        if (remaining === 0) return finish(idx);
+        if (done(next)) return finish(idx);
         if (states.length > maxStates) return { solved: false, reason: 'limit', explored: states.length };
         open.push(priority(idx, remaining), idx);
       }

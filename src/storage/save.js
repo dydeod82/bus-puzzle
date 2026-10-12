@@ -4,7 +4,7 @@
 //    읽기·쓰기가 예외를 던질 수 있다. 전부 try/catch로 감싸고, 못 쓰면 이번 방문 동안만 기억한다.
 // ⚠️ 저장된 값은 사용자가 손댈 수 있으므로 읽을 때 모양을 다시 확인한다 (깨진 값으로 화면이 멈추지 않게).
 
-import { emptyHardRecord, HardResult, HARD_RECENT_LIMIT } from '../core/records.js';
+import { emptyHardRecord, HardResult, HARD_RECENT_LIMIT, HARD_RULES_VERSION } from '../core/records.js';
 
 const SAVE_KEY = 'bus-puzzle:save:v1';
 const CACHE_KEY = 'bus-puzzle:puzzles:v1';
@@ -77,10 +77,13 @@ function cleanHardBest(b) {
     : null;
 }
 
-/** 하드 모드 기록 — 깨진 값은 버리고 모양을 맞춘다 */
+/**
+ * 하드 모드 기록 — 깨진 값은 버리고 모양을 맞춘다.
+ * ★ 규칙 판(rules)이 지금과 다르면 통째로 비운다 — 규칙이 바뀐 뒤의 기록과 견줄 수 없다 (판 번호가 없던 옛 기록도 비운다)
+ */
 function cleanHard(h) {
   const base = emptyHardRecord();
-  if (!h || typeof h !== 'object') return base;
+  if (!h || typeof h !== 'object' || h.rules !== HARD_RULES_VERSION) return base;
   const recent = (Array.isArray(h.recent) ? h.recent : [])
     .filter((e) => e && isInt(e.id) && typeof e.seed === 'string' && RESULTS.has(e.result))
     .slice(0, HARD_RECENT_LIMIT)
@@ -96,6 +99,7 @@ function cleanHard(h) {
     }));
   const maxId = recent.reduce((m, e) => Math.max(m, e.id), 0);
   return {
+    rules: HARD_RULES_VERSION,
     plays: isInt(h.plays) ? h.plays : recent.length,
     clears: isInt(h.clears) ? h.clears : 0,
     bestScore: (() => { const x = cleanHardBest(h.bestScore); return x && x.score != null ? x : null; })(),
@@ -107,7 +111,8 @@ function cleanHard(h) {
 }
 
 /**
- * @returns {{ unlocked: number, records: Object<string, record>, free: object, hard: object }}
+ * @returns {{ unlocked: number, records: Object<string, record>, free: object, hard: object, settings: object }}
+ *   settings.hideHardIntro — 하드 모드 시작 안내를 '다음부터 안 보기' 했는가
  *   unlocked — 플레이할 수 있는 가장 높은 단계 (1부터)
  */
 export function loadSave(levelCount) {
@@ -121,12 +126,18 @@ export function loadSave(levelCount) {
   const free = { ...FREE_DEFAULTS };
   for (const key of ['size', 'cars', 'buses', 'blocks']) if (isInt(raw.free?.[key])) free[key] = raw.free[key];
   if (typeof raw.free?.seed === 'string') free.seed = raw.free.seed.slice(0, 40);
-  return { unlocked, records, free, hard: cleanHard(raw.hard) };
+  const settings = { hideHardIntro: raw.settings?.hideHardIntro === true };
+  return { unlocked, records, free, hard: cleanHard(raw.hard), settings };
 }
 
 export function writeSave(save) {
   return writeJson(SAVE_KEY, {
-    version: 1, unlocked: save.unlocked, records: save.records, free: save.free, hard: save.hard ?? emptyHardRecord(),
+    version: 1,
+    unlocked: save.unlocked,
+    records: save.records,
+    free: save.free,
+    hard: save.hard ?? emptyHardRecord(),
+    settings: save.settings ?? { hideHardIntro: false },
   });
 }
 

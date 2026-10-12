@@ -36,7 +36,7 @@
         <h1 id="title-heading" class="logo" tabindex="-1"><span class="logo-a">버스</span><span class="logo-b">빼기</span></h1>
         <nav class="title-menu" aria-label="메인 메뉴">
           <button class="btn btn-primary" type="button" data-action="start">시작</button>
-          <button class="btn btn-hard" type="button" data-action="hard">하드 모드<span class="btn-note">25×25 · 판이 저절로 움직여요</span></button>
+          <button class="btn btn-hard" type="button" data-action="hard">하드 모드<span class="btn-note">25×25 · 리무진 2대를 탈출시켜요</span></button>
           <button class="btn" type="button" data-action="records">기록</button>
           <button class="btn" type="button" data-action="free" id="btn-free">자유 모드<span class="btn-note"></span></button>
           <button class="btn btn-ghost" type="button" data-action="rules-open">규칙 보기</button>
@@ -210,12 +210,12 @@
 
       <aside class="game-side">
         <dl class="stats stats-hard" aria-label="진행 상황">
+          <div class="stat stat-limo"><dt>리무진 탈출</dt><dd id="hard-limos">0/2</dd></div>
           <div class="stat stat-score"><dt>예상 점수</dt><dd id="hard-score">100점</dd></div>
           <div class="stat"><dt>남은 차</dt><dd id="hard-left">0</dd></div>
           <div class="stat"><dt>이동</dt><dd id="hard-moves">0</dd></div>
           <div class="stat"><dt>시간</dt><dd id="hard-time">0:00</dd></div>
           <div class="stat"><dt>새 차량</dt><dd id="hard-countdown">없음</dd></div>
-          <div class="stat"><dt>랜덤</dt><dd id="hard-random">–</dd></div>
         </dl>
         <div class="game-actions four">
           <button class="btn" type="button" data-action="undo">되돌리기<span class="btn-note" id="hard-undo-count"></span></button>
@@ -345,6 +345,29 @@
     </section>
   </main>
 
+  <!-- ── 하드 모드 안내문 (시작 안내 · 규칙 창이 같은 내용을 쓴다) ── -->
+  <template id="hard-guide-tpl">
+    <div class="hard-guide">
+      <h3><span aria-hidden="true">👑</span> 하드 모드</h3>
+      <p class="hard-guide-lead">안전구역에 갇힌 리무진 2대를 판 밖으로 탈출시키세요.</p>
+      <ul>
+        <li>가운데 7×7은 안전구역, 그 바깥은 변화구역이에요.</li>
+        <li>내가 차를 한 번 움직일 때마다 변화구역의 차 1~4대가 제멋대로 움직여요.</li>
+        <li>차를 밖으로 빼면 3턴 뒤 새 차가 1대 들어와요.</li>
+        <li>리무진은 나만 움직일 수 있어요.</li>
+        <li>적게 움직일수록 점수가 높아요. (100점 만점)</li>
+      </ul>
+    </div>
+  </template>
+
+  <dialog class="intro" id="hard-intro" aria-label="하드 모드 안내">
+    <div class="intro-inner">
+      <div data-hard-guide></div>
+      <label class="intro-hide"><input type="checkbox" id="hard-intro-hide"> 다음부터 안 보기</label>
+      <button class="btn btn-primary btn-wide" type="button" data-action="intro-close" autofocus>시작하기</button>
+    </div>
+  </dialog>
+
   <!-- ── 규칙 ─────────────────────────────────── -->
   <dialog class="rules" id="rules" aria-labelledby="rules-title">
     <div class="rules-inner">
@@ -367,21 +390,18 @@
               되돌리면 이동 수도 줄지만, 되돌린 횟수는 기록에 함께 남아요.</li>
           </ol>
 
-          <section class="rules-hard" aria-labelledby="rules-hard-title">
-            <h3 id="rules-hard-title">하드 모드</h3>
-            <ul>
-              <li>25×25 판, 시작할 때마다 새 시드로 판을 만들어요. 같은 시드는 같은 판·같은 랜덤 흐름이에요.</li>
-              <li>정중앙 5×5 <strong class="safe">안전구역</strong>을 뺀 나머지가 <strong class="change">변화구역</strong>이에요.
-                내가 차를 움직일 때마다 변화구역의 차 1~4대가 저절로 미끄러져요 (판 밖이나 안전구역으로는 가지 않아요).</li>
-              <li>차를 빼면 3턴 뒤 새 차가 한 대 와요. 기다리는 동안 더 빼도 오는 차는 한 대뿐이에요.</li>
-              <li>되돌리면 랜덤 이동과 새 차까지 함께 되돌아가요. 같은 수를 다시 두면 같은 일이 일어나요.</li>
-              <li><strong>점수</strong> <span id="rules-hard-score"></span></li>
-            </ul>
+          <section class="rules-hard" aria-label="하드 모드">
+            <div data-hard-guide></div>
+            <p class="rules-hard-extra">
+              시작할 때마다 새 시드로 판을 만들어요. 같은 시드는 같은 판·같은 랜덤 흐름이고, 되돌리면 랜덤 이동과 새 차까지 함께 되돌아가요.<br>
+              <strong>점수</strong> <span id="rules-hard-score"></span>
+            </p>
           </section>
 
           <ul class="legend" aria-label="판 위의 것들">
             <li><span class="legend-icon car"></span>자동차 · 2칸</li>
             <li><span class="legend-icon bus"></span>버스 · 3칸</li>
+            <li><span class="legend-icon limo">♛</span>리무진 · 2칸 (하드 모드, 나만 움직일 수 있어요)</li>
             <li><span class="legend-icon block"></span>구조물 · 움직이지 않아요</li>
             <li><span class="legend-icon front">›</span>지붕의 › 표시와 앞유리가 앞쪽</li>
           </ul>
