@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  passageInfo, relevantVehicles, minEscapeMoves, minLeaveSafeMoves, minClearPassageMoves, buildFullGrid,
+  passageInfo, relevantVehicles, chainRelevant, makeChainBound, minEscapeMoves, minLeaveSafeMoves, minClearPassageMoves, buildFullGrid,
 } from '../src/core/hardSolver.js';
 import { createPuzzle, buildGrid, travel, EXITED, OFF_BOARD, getMove, applyMove } from '../src/core/rules.js';
 import { parseTextBoard } from '../src/core/textBoard.js';
@@ -137,15 +137,14 @@ function randomSmallBoard(rng, N, count, blocks) {
 test('최소 수: 작은 무작위 판에서, 같은 차만 움직이는 완전 탐색과 언제나 같은 답 (A*가 최소를 놓치지 않는다)', () => {
   const rng = createRng('hard-solver-exact');
   let compared = 0;
+  const bounds = [];
   for (let t = 0; t < 120 && compared < 25; t++) {
     const puzzle = randomSmallBoard(rng, 7, 8, 3);
     const limo = 0;
     const r = minEscapeMoves(puzzle, puzzle.start, [limo], { closureDepth: 3 });
     if (!r.solved && r.reason !== 'depth' && r.reason !== 'impossible') continue;
     const grid = buildFullGrid(puzzle, puzzle.start);
-    const seeds = new Set([limo]);
-    for (const ps of passageInfo(puzzle, puzzle.start, grid, limo)) if (!ps.dead) ps.blockers.forEach((b) => seeds.add(b));
-    const { ids } = relevantVehicles(puzzle, puzzle.start, grid, [...seeds], 3);
+    const { ids } = chainRelevant(puzzle, puzzle.start, grid, [limo], 3);
     const exact = exactEscape(puzzle, [limo], 300000, new Set(ids));
     if (exact == null) {
       assert.equal(r.solved, false, `시도 ${t}: 완전 탐색은 못 푸는데 A*가 풀었다`);
@@ -157,9 +156,41 @@ test('최소 수: 작은 무작위 판에서, 같은 차만 움직이는 완전 
     assert.ok(replayEscapes(puzzle, r.moves, [limo]));
     // 관련 차량만 움직인 답은 판 전체를 움직이는 진짜 최소보다 짧을 수 없다 (상한)
     const full = exactEscape(puzzle, [limo]);
-    if (full != null) assert.ok(r.length >= full);
+    if (full != null) {
+      assert.ok(r.length >= full);
+      // 연쇄 하한은 진짜 최소(판 전체)보다 크지 않다 — 크면 A*가 최소를 놓친다
+      assert.ok(r.bound <= full, `시도 ${t}: 하한 ${r.bound} > 진짜 최소 ${full}`);
+      bounds.push([r.bound, full]);
+    }
   }
   assert.ok(compared >= 10, `견준 판 ${compared}개`);
+  assert.ok(bounds.some(([b, f]) => b === f), '하한이 딱 맞는 판도 있다 (너무 느슨하지 않다)');
+});
+
+test('연쇄 하한: 막는 차가 비켜날 길이 한쪽뿐이면 그 길의 차도 센다 (CHAIN = 정확히 4)', () => {
+  const p = limoBoard(CHAIN, ['k']);
+  const k = idOf(p, 'k');
+  // a는 위·아래 어느 쪽으로든 비킬 수 있고, b는 아래가 구조물이라 위로만 — 위에 c가 있다 → a, b, c, 리무진
+  assert.equal(makeChainBound(p, [k])(p.start, buildFullGrid(p, p.start)), 4);
+  assert.deepEqual(chainRelevant(p, p.start, buildFullGrid(p, p.start), [k], 3).ids.sort(), [k, idOf(p, 'a'), idOf(p, 'b'), idOf(p, 'c')].sort());
+});
+
+test('연쇄 하한: 다른 리무진이 통로를 막고 있어도 두 번 세지 않는다', () => {
+  // k(가로)의 오른쪽 통로에 m(세로 리무진)이 서 있다 — m이 아래로 나가면 그 한 수로 k의 길도 열린다 → 최소 2수
+  const p = limoBoard(`
+    # k K . m .
+    . . . . M .
+    . . . . . .
+    . . . . . .
+    . . . . . .
+    . . . . . .
+  `, ['k', 'm']);
+  const k = idOf(p, 'k');
+  const m = idOf(p, 'm');
+  const r = minEscapeMoves(p, p.start, [k, m]);
+  assert.equal(r.bound, 2);
+  assert.equal(r.length, 2);
+  assert.equal(exactEscape(p, [k, m]), 2);
 });
 
 test('최소 수: 리무진 두 대 — 통로를 함께 쓰는 차는 한 번만 센다', () => {

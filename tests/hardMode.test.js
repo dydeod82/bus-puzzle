@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 
 import {
   HardSession, HardStatus, HardStuck, zoneLayout, isSafeCell, inChangeZone, randomMovable, spawnVehicle,
-  checkHardStuck, generateHardPuzzle, hardPuzzleParams, hardScore,
+  checkHardStuck, generateHardPuzzle, hardScore,
 } from '../src/core/hardMode.js';
+import { minLeaveSafeMoves } from '../src/core/hardSolver.js';
 import { HARD_MODE } from '../src/core/levels.js';
 import { createRng } from '../src/core/random.js';
 import {
@@ -59,35 +60,49 @@ test('구역: 25×25에서 안전구역은 정중앙 7×7(9~15), 바깥 9칸이 
 
 // ── 판 생성 ─────────────────────────────────────────────
 
-test('판 생성: 구조물은 변화구역 곳곳에 차와 섞여 흩어진다 (안전구역에 붙여 두르지 않는다)', () => {
+/** 리무진 차선(가로 리무진의 행, 세로 리무진의 열)의 칸인가 */
+function onLimoLane(puzzle, x, y) {
+  return puzzle.vehicles.some((v) => v.kind === 'limo' && (v.axis === 'h' ? y === v.lane : x === v.lane));
+}
+
+test('판 생성: 구조물은 변화구역 곳곳에 차와 섞여 흩어지고, 안전구역 안에도 따로 놓인다 — 리무진 차선에는 없다', () => {
   const z = zoneLayout(25, 7);
   for (const { puzzle } of hardBoards) {
     const ring = (b) => Math.min(b.x, b.y, 24 - b.x, 24 - b.y);
-    assert.ok(puzzle.blocks.every((b) => !isSafeCell(z, b.x, b.y)), '안전구역에는 구조물이 없다');
-    assert.ok(puzzle.blocks.some((b) => ring(b) <= 2), '가장자리 쪽에도 구조물이 있다');
-    assert.ok(puzzle.blocks.some((b) => ring(b) >= 6), '안쪽에도 구조물이 있다');
+    const inside = puzzle.blocks.filter((b) => isSafeCell(z, b.x, b.y));
+    const outside = puzzle.blocks.filter((b) => !isSafeCell(z, b.x, b.y));
+    assert.equal(inside.length, HARD_MODE.safeBlocks, '안전구역 안의 구조물');
+    assert.equal(outside.length, HARD_MODE.blocks, '변화구역의 구조물');
+    assert.ok(puzzle.blocks.every((b) => !onLimoLane(puzzle, b.x, b.y)), '리무진 차선에 구조물이 있으면 그 통로는 영영 못 쓴다');
+    assert.ok(outside.some((b) => ring(b) <= 2), '가장자리 쪽에도 구조물이 있다');
+    assert.ok(outside.some((b) => ring(b) >= 6), '안쪽에도 구조물이 있다');
     // 차도 바깥 고리까지 고루 놓인다 (안쪽부터 빽빽이 채우는 방식이 아니다)
     const outerVehicles = puzzle.vehicles.filter((v) => vehicleCells(puzzle, v.id, puzzle.start[v.id]).some((c) => ring(c) <= 2));
     assert.ok(outerVehicles.length >= 10);
   }
 });
 
-test('판 생성: 설정한 수의 일반 차(버스 30%)는 변화구역에만, 리무진 2대는 안전구역에, 랜덤 이동이 없다면 리무진을 모두 뺄 수 있다', () => {
-  const p = hardPuzzleParams();
+test('판 생성: 일반 차(버스 30%)는 안전구역에 3~4대(버스 최대 1대), 나머지는 변화구역에 — 리무진은 가로·세로 하나씩, 랜덤 이동이 없다면 모두 뺄 수 있다', () => {
   const z = zoneLayout(25, 7);
   for (const { g, puzzle } of hardBoards) {
     const regular = puzzle.vehicles.filter((v) => v.kind !== 'limo');
     const limos = puzzle.vehicles.filter((v) => v.kind === 'limo');
     assert.equal(puzzle.size, 25);
     assert.equal(regular.length, HARD_MODE.startVehicles);
-    assert.equal(regular.filter((v) => v.kind === 'bus').length, p.buses);
+    assert.equal(regular.filter((v) => v.kind === 'bus').length, Math.round(HARD_MODE.startVehicles * HARD_MODE.busRatio));
     assert.equal(limos.length, 2);
-    assert.equal(puzzle.blocks.length, HARD_MODE.blocks);
+    assert.deepEqual(limos.map((v) => v.axis).sort(), ['h', 'v'], '가로 하나·세로 하나');
+    assert.equal(puzzle.blocks.length, HARD_MODE.blocks + HARD_MODE.safeBlocks);
+    const safeCars = [];
     for (const v of puzzle.vehicles) {
       const cells = vehicleCells(puzzle, v.id, puzzle.start[v.id]);
-      if (v.kind === 'limo') assert.ok(cells.every((c) => isSafeCell(z, c.x, c.y)), '리무진은 안전구역 안');
-      else assert.ok(cells.every((c) => !isSafeCell(z, c.x, c.y)), '일반 차는 변화구역에만');
+      const inSafe = cells.filter((c) => isSafeCell(z, c.x, c.y)).length;
+      assert.ok(inSafe === 0 || inSafe === cells.length, '안전구역 경계에 걸친 차는 없다');
+      if (v.kind === 'limo') assert.equal(inSafe, cells.length, '리무진은 안전구역 안');
+      else if (inSafe > 0) safeCars.push(v);
     }
+    assert.ok(safeCars.length >= HARD_MODE.safeCars[0] && safeCars.length <= HARD_MODE.safeCars[1], `안전구역 차 ${safeCars.length}대`);
+    assert.ok(safeCars.filter((v) => v.kind === 'bus').length <= HARD_MODE.safeBusMax, '안전구역 버스는 최대 1대');
     // 솔버의 수순을 규칙 엔진으로 다시 둬서 리무진 두 대가 정말 나가는지 본다
     let pos = puzzle.start.slice();
     for (const m of g.solution) {
@@ -97,6 +112,25 @@ test('판 생성: 설정한 수의 일반 차(버스 30%)는 변화구역에만,
     }
     assert.ok(limos.every((v) => pos[v.id] === EXITED));
   }
+});
+
+test('판 생성: 리무진마다 안전구역을 벗어나는 데만 최소 3~5수', () => {
+  const z = zoneLayout(25, 7);
+  for (const { g, puzzle } of hardBoards) {
+    const limos = puzzle.vehicles.filter((v) => v.kind === 'limo').map((v) => v.id);
+    const leave = limos.map((l) => minLeaveSafeMoves(puzzle, puzzle.start, l, (x, y) => isSafeCell(z, x, y), { maxDepth: 8 }));
+    for (const r of leave) {
+      assert.ok(r.solved, '안전구역을 벗어날 수 있다 (안에서 꽉 막히지 않았다)');
+      assert.ok(r.length >= HARD_MODE.safeLeave[0] && r.length <= HARD_MODE.safeLeave[1], `벗어나는 최소 ${r.length}수`);
+    }
+    assert.deepEqual(leave.map((r) => r.length), g.leaveSafe, '생성기가 잰 값과 같다');
+  }
+});
+
+test('판 생성: 같은 시드면 같은 판', () => {
+  const again = generateHardPuzzle(hardBoards[0].seed);
+  assert.deepEqual(again.def, hardBoards[0].g.def);
+  assert.notDeepEqual(generateHardPuzzle('다른 시드').def, hardBoards[0].g.def);
 });
 
 // ── 랜덤 이동 ────────────────────────────────────────────
@@ -188,6 +222,31 @@ test('랜덤 이동: 안전구역에 한 칸이라도 걸친 차는 움직이지
   const z = zoneLayout(9, 3);
   const grid = buildGrid(p, p.start);
   assert.deepEqual(randomMovable(p, grid, z, p.start), [idOf(p, 'b')]);
+});
+
+test('랜덤 이동: 안전구역 차도 플레이어가 변화구역으로 완전히 빼내면 그때부터 랜덤 이동 대상', () => {
+  // 11×11, 안전구역 (4~6). a는 안전구역 안의 세로 차 — 플레이어가 위로 밀면 맨 윗줄 c 앞(1~2행)에 멈춘다 = 변화구역.
+  // 그 아래 3행이 비어 있어 랜덤 이동이 한 칸 움직일 수 있다
+  const p = board(`
+    . . . . . c C . . . .
+    . . . . . . . . . . .
+    . . . . . . . . . . .
+    . . . . . . . . . . .
+    . . . . . a . . . . .
+    . . . . . A . . . . .
+    . . . . . # . . . . .
+    . . . . . . . . . . .
+    . . . . . . . . . . .
+    . . . . . . . . . . .
+    . . . . . . . . . . .
+  `);
+  const z = zoneLayout(11, 3);
+  const a = idOf(p, 'a');
+  assert.ok(!randomMovable(p, buildGrid(p, p.start), z, p.start).includes(a), '안전구역 안에서는 아니다');
+  const pos = applyMove(p.start, getMove(p, p.start, a, -1));
+  assert.equal(pos[a], 1);
+  assert.ok(inChangeZone(p, z, a, pos[a]));
+  assert.ok(randomMovable(p, buildGrid(p, pos), z, pos).includes(a), '변화구역으로 나오면 대상이다');
 });
 
 // ── 새 차량 ─────────────────────────────────────────────

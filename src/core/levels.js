@@ -78,20 +78,19 @@ export function freeSettingsProblem(s) {
 // 숫자만 바꿔 조정한다. 판은 시작할 때마다 새 시드로 만든다.
 //
 //   size, safeSize  판 크기와 정중앙 안전구역 크기 — (size − safeSize)가 짝수여야 가운데에 놓인다 (25 = 9 + 7 + 9)
-//   startVehicles   시작 차량 수 (리무진 제외), busRatio 그중 버스 비율 (새로 도착하는 차량의 종류도 이 비율로 뽑는다)
-//                   시작 차량은 변화구역에만 놓는다
-//   limos           안전구역 안에 놓는 리무진 수 — 모두 판 밖으로 빼면 클리어
-//   blocks          고정 구조물 수 — 변화구역 곳곳에 차와 섞어 흩는다
-//   blockBand       null이면 흩는다. 숫자 n이면 구조물을 안전구역 바로 바깥 n겹 안에만 놓는다 (벽처럼 두른다)
-//                   ⚠️ 차가 200대쯤으로 빽빽하면(변화구역의 90%) 흩은 구조물이 줄을 끊어 150대 남짓에서 판을 못 짓는다 (실측).
-//                     그때는 2로 두면 줄 끝만 막혀 200대가 들어간다. 100대에서는 흩어도 넉넉하다
-//   maxExitable     시작하자마자 바로 나갈 수 있는 차량 수 상한 (판을 여러 번 지어 맞춘다 — 못 맞추면 가장 적은 판)
-//                   100대·구조물을 흩으면 그냥 지을 때 45~50대, 상한을 두면 40대 안팎이다
+//   startVehicles   시작 차량 수 (리무진 제외, 안전구역 안의 차 포함), busRatio 그중 버스 비율
+//                   (새로 도착하는 차량의 종류도 이 비율로 뽑는다)
+//   limos           안전구역 안에 놓는 리무진 수 — 모두 판 밖으로 빼면 클리어. 판 생성기는 2대(가로 하나·세로 하나)만 짓는다
+//   blocks          고정 구조물 수 — 변화구역 곳곳에 차와 섞어 흩는다. 리무진 차선에는 놓지 않는다
+//   safeBlocks      안전구역 안에 따로 놓는 구조물 수 (blocks와 별개). 리무진 차선에는 놓지 않는다
+//   safeCars        안전구역 안에 놓는 일반 차 수 [최소, 최대] — 리무진이 안전구역을 빠져나가는 길 위에 놓는다
+//   safeBusMax      그중 버스 최대 수
+//   safeLeave       리무진마다 '안전구역을 벗어나는 최소 수'가 이 범위여야 한다 (판 생성기가 배치를 다시 뽑아 맞춘다)
 //   randomMin/Max   한 턴에 변화구역에서 저절로 움직이는 차량 수 범위 (리무진은 제외)
 //   spawnDelay      탈출이 생긴 뒤 새 차량이 도착하기까지의 턴 수
 //
 // 2026-10-12: 차량·구조물 두 배 (50 → 100, 30 → 60) → 하드 모드 개편 (안전구역 7×7, 차량 200, 리무진 2대)
-//             → 차량 절반(100), 구조물을 차와 섞어 흩기
+//             → 차량 절반(100), 구조물을 차와 섞어 흩기 → 안전구역 구조물 6 + 안전구역 차 3~4대 (전용 생성기 hardGenerator.js)
 
 export const HARD_MODE = Object.freeze({
   size: 25,
@@ -100,8 +99,10 @@ export const HARD_MODE = Object.freeze({
   busRatio: 0.3,
   limos: 2,
   blocks: 60,
-  blockBand: null,
-  maxExitable: 40,
+  safeBlocks: 6,
+  safeCars: Object.freeze([3, 4]),
+  safeBusMax: 1,
+  safeLeave: Object.freeze([3, 5]),
   randomMin: 1,
   randomMax: 4,
   spawnDelay: 3,

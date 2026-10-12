@@ -1,12 +1,12 @@
 // 시작점 — 화면들을 잇고, 한 판을 시작·마무리하고, 기록을 저장한다.
 
 import { LEVELS, LEVEL_COUNT, HARD_MODE, freeModeParams } from './core/levels.js';
-import { hardPuzzleParams, describeHardScore } from './core/hardMode.js';
+import { describeHardScore } from './core/hardMode.js';
 import { createPuzzle } from './core/rules.js';
 import { mergeRecord, starsFor, startHardAttempt, finishHardAttempt, HardResult } from './core/records.js';
 import { randomSeedString } from './core/random.js';
 import { loadSave, writeSave } from './storage/save.js';
-import { loadPuzzle } from './ui/puzzleLoader.js';
+import { loadPuzzle, loadHardPuzzle } from './ui/puzzleLoader.js';
 import { Screens } from './ui/screens.js';
 import { GameScreen } from './ui/gameScreen.js';
 import { HardScreen } from './ui/hardScreen.js';
@@ -173,7 +173,7 @@ async function startPuzzle(params, seed, title, subtitleOf) {
 
 /**
  * 하드 모드 — 시작할 때마다 새 시드 (시드를 넣으면 그 판). 바깥(시작 화면·기록)에서 들어올 때만 안내를 띄운다 (entering).
- * ⚠️ 판 생성 시드는 generateHardPuzzle과 똑같이 `hard:${seed}`로 넘긴다 — 다르면 같은 시드라도 Node(테스트)와 화면의 판이 갈린다
+ * ⚠️ 판은 generateHardPuzzle(테스트)과 같은 생성기·같은 시드로 만든다 — 다르면 같은 시드라도 Node(테스트)와 화면의 판이 갈린다
  */
 async function playHard(seed, { entering = false } = {}) {
   const token = ++loadToken;
@@ -182,7 +182,7 @@ async function playHard(seed, { entering = false } = {}) {
   hard.showLoading(seed);
   if (entering) showHardIntro();   // 판을 만드는 동안 안내를 읽는다
   try {
-    const data = await loadPuzzle(hardPuzzleParams(HARD_MODE), `hard:${seed}`);
+    const data = await loadHardPuzzle(seed, HARD_MODE);
     if (token !== loadToken || screens.current !== 'hard') return;
     play.data = data;
     hard.start({ puzzle: createPuzzle(data.def), seed, config: HARD_MODE });

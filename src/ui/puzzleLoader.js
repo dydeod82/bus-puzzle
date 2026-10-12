@@ -3,7 +3,9 @@
 // ★ 생성은 Web Worker에서 돈다. 모듈 워커를 못 쓰는 환경(오래된 브라우저 등)이면
 //   조용히 화면 스레드에서 돌린다 — 잠깐 멈출 뿐 결과는 같다(같은 시드 → 같은 판).
 
-import { generatePuzzle, normalizeParams, GENERATOR_VERSION } from '../core/generator.js';
+import { normalizeParams, GENERATOR_VERSION } from '../core/generator.js';
+import { HARD_GENERATOR_VERSION } from '../core/hardGenerator.js';
+import { runJob } from './puzzleJobs.js';
 import { readPuzzleCache, writePuzzleCache } from '../storage/save.js';
 
 const memory = new Map();
@@ -41,20 +43,19 @@ function getWorker() {
   return worker;
 }
 
-function viaWorker(params, seed) {
+function viaWorker(kind, params, seed) {
   const w = getWorker();
   if (!w) return Promise.reject(new WorkerUnavailable());
   const id = nextId++;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    w.postMessage({ id, params, seed });
+    w.postMessage({ id, kind, params, seed });
   });
 }
 
-async function viaMainThread(params, seed) {
+async function viaMainThread(kind, params, seed) {
   await new Promise((r) => setTimeout(r, 30));   // '불러오는 중'이 먼저 그려지도록
-  const r = generatePuzzle(params, seed);
-  return { def: r.def, par: r.par, slides: r.slides, optimal: r.optimal };
+  return runJob(kind, params, seed);
 }
 
 export function cacheKey(params, seed) {
@@ -67,8 +68,21 @@ export function cacheKey(params, seed) {
  * @returns Promise<{ def, par, slides, optimal }>
  * 조건이 너무 빽빽해 판을 못 만들면 Error로 거부된다 (메시지를 그대로 화면에 보여 줘도 된다).
  */
-export async function loadPuzzle(params, seed) {
-  const key = cacheKey(params, seed);
+export function loadPuzzle(params, seed) {
+  return load(cacheKey(params, seed), 'level', params, seed);
+}
+
+/**
+ * 하드 모드 판 — 시드는 사람이 보는 시드 그대로 넘긴다 (생성기가 안에서 `hard:${seed}`로 난수를 만든다).
+ * 점수 설정은 판과 무관하므로 캐시 키에서 뺀다 (점수 규칙만 바꿨는데 기억해 둔 판이 모두 버려지지 않게).
+ * @returns Promise<{ def, par }>
+ */
+export function loadHardPuzzle(seed, config) {
+  const { score, ...board } = config;
+  return load(`hard|${HARD_GENERATOR_VERSION}|${seed}|${JSON.stringify(board)}`, 'hard', config, seed);
+}
+
+async function load(key, kind, params, seed) {
   const hit = memory.get(key) ?? readPuzzleCache(key);
   if (hit) {
     memory.set(key, hit);
@@ -77,10 +91,10 @@ export async function loadPuzzle(params, seed) {
 
   let result;
   try {
-    result = await viaWorker(params, seed);
+    result = await viaWorker(kind, params, seed);
   } catch (err) {
     if (!(err instanceof WorkerUnavailable)) throw err;
-    result = await viaMainThread(params, seed);
+    result = await viaMainThread(kind, params, seed);
   }
   memory.set(key, result);
   writePuzzleCache(key, result);
