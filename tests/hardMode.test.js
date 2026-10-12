@@ -5,7 +5,7 @@ import {
   HardSession, HardStatus, HardStuck, zoneLayout, isSafeCell, inChangeZone, randomMovable, randomTravel, spawnVehicle,
   checkHardStuck, generateHardPuzzle, hardScore, livePassages, estimateTarget, blockChance, runRandomPhase,
 } from '../src/core/hardMode.js';
-import { minLeaveSafeMoves } from '../src/core/hardSolver.js';
+import { minLeaveSafeMoves, minEscapeMoves } from '../src/core/hardSolver.js';
 import { HARD_GEN_DEFAULTS } from '../src/core/hardGenerator.js';
 import { HARD_MODE } from '../src/core/levels.js';
 import { createRng } from '../src/core/random.js';
@@ -202,6 +202,42 @@ test('판 생성: 변화구역 구조물의 일부는 통로 곁 연쇄에 쓰�
   for (const { g } of hardBoards) {
     assert.ok(g.chainBlocks >= 6 && g.chainBlocks <= HARD_MODE.blocks / 2, `연쇄에 쓴 구조물 ${g.chainBlocks}개`);
   }
+});
+
+test('난이도 필터: 랜덤 이동이 없다면 최소 클리어 수가 18~26 — 솔버로 다시 재어도 같다', () => {
+  const [lo, hi] = HARD_MODE.targetMoves;
+  assert.deepEqual([lo, hi], [18, 26]);
+  for (const { seed, g, puzzle } of hardBoards) {
+    assert.equal(g.met, true, `${seed}: 범위에 든 판`);
+    assert.ok(g.par >= lo && g.par <= hi, `${seed}: 최소 ${g.par}수`);
+    const limos = puzzle.vehicles.filter((v) => v.kind === 'limo').map((v) => v.id);
+    assert.equal(minEscapeMoves(puzzle, puzzle.start, limos).length, g.par);
+  }
+});
+
+test('난이도 필터: 못 맞추면 단계를 올려 가며 다시 짓고, 끝까지 못 맞추면 가장 가까운 판을 쓴다 (멈추지 않는다)', () => {
+  const stages = HARD_GEN_DEFAULTS.stages.length;
+  const impossible = generateHardPuzzle('필터', { ...HARD_MODE, targetMoves: [60, 70], gen: { stageAttempts: 2 } });
+  assert.equal(impossible.met, false);
+  assert.equal(impossible.tried, stages * 2, '모든 단계를 다 지어 봤다');
+  assert.ok(impossible.par < 60);
+  // 어떤 판이든 되는 범위면 처음으로 풀리는 판을 바로 쓴다
+  const easy = generateHardPuzzle('필터', { ...HARD_MODE, targetMoves: [1, 99] });
+  assert.equal(easy.met, true);
+  assert.equal(easy.attempts, easy.tried);
+});
+
+test('난이도 필터: 단계가 오를수록 막는 차·잠금·연쇄가 늘어난다 (줄지 않는다)', () => {
+  const merged = HARD_GEN_DEFAULTS.stages.map((st) => ({ ...HARD_GEN_DEFAULTS, ...st }));
+  for (let k = 1; k < merged.length; k++) {
+    const a = merged[k - 1];
+    const b = merged[k];
+    assert.ok(b.passageBlockers[0] >= a.passageBlockers[0] && b.passageBlockers[1] >= a.passageBlockers[1]);
+    assert.ok(b.lockChance >= a.lockChance);
+    assert.ok(b.chainDepth[0] >= a.chainDepth[0] && b.chainDepth[1] >= a.chainDepth[1]);
+    assert.ok(b.passageBlockers[1] <= 4, '통로당 막는 차는 4대까지');
+  }
+  assert.ok(merged.at(-1).lockChance > merged[0].lockChance);
 });
 
 test('판 생성: 같은 시드면 같은 판', () => {

@@ -205,13 +205,19 @@ function passageChain(sw, pos, grid, L, sign, depthLimit, mark, stamp, span = In
   for (let q = 0; q < queue.length; q++) {
     const [i, , , exitDir, depth] = queue[q];
     let opts = sw.itemOptions(grid, pos, queue[q], fp);
-    if (opts.length === 0) return null;   // 어느 쪽으로도 못 비킨다 — 이 통로는 막혔다
+    if (opts.length === 0) {   // 어느 쪽으로도 못 비킨다 — 이 통로는 막혔다
+      if (sw.trace) sw.trace.push({ why: 'stuck', item: queue[q] });
+      return null;
+    }
     if (opts.length === 2 && (opts[0].occ.length === 0 || opts[1].occ.length === 0)) continue;   // 그냥 비킬 수 있다
     if (opts.length === 2) {
       // 갈림길 — 쪽마다 '그쪽을 고르면 반드시 움직여야 하는 차'를 연쇄로 모은다.
       // 한쪽이 영영 안 되는 길이면(그 길의 차가 못 비킨다) 남은 쪽이 곧 외길이다
       const sub = opts.map((opt) => forcedClosure(sw, pos, grid, i, opt, exitDir, depthLimit - depth, fp));
-      if (!sub[0] && !sub[1]) return null;
+      if (!sub[0] && !sub[1]) {
+        if (sw.trace) sw.trace.push({ why: 'both-branches', item: queue[q] });
+        return null;
+      }
       if (sub[0] && sub[1]) {
         either.push(sub);
         continue;
@@ -255,6 +261,15 @@ function forcedClosure(sw, pos, grid, i, opt, exitDir, depthLeft, fp) {
     }
   }
   return out;
+}
+
+/**
+ * 통로 하나의 연쇄 (분석·시험용) — { must, either } | null. trace 배열을 넘기면 막힌 이유를 남긴다
+ */
+export function passageChainOf(puzzle, pos, limoId, sign, { depth = HARD_SOLVER_DEFAULTS.chainDepth, trace = null } = {}) {
+  const sw = makeSweeper(puzzle);
+  sw.trace = trace;
+  return passageChain(sw, pos, buildFullGrid(puzzle, pos), limoId, sign, depth, new Int32Array(sw.V), 1);
 }
 
 /**

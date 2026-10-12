@@ -86,6 +86,8 @@ export function freeSettingsProblem(s) {
 //   safeCars        안전구역 안에 놓는 일반 차 수 [최소, 최대] — 리무진이 안전구역을 빠져나가는 길 위에 놓는다
 //   safeBusMax      그중 버스 최대 수
 //   safeLeave       리무진마다 '안전구역을 벗어나는 최소 수'가 이 범위여야 한다 (판 생성기가 배치를 다시 뽑아 맞춘다)
+//   targetMoves     랜덤 이동이 없다고 가정한 '리무진 둘을 모두 빼는 최소 수'가 이 범위인 판만 쓴다 (난이도 필터 —
+//                   못 맞추면 통로를 막는 차·연쇄를 늘려 다시 짓는다. 단계는 hardGenerator.js의 HARD_GEN_DEFAULTS.stages)
 //   randomMin/Max   한 턴에 변화구역에서 저절로 움직이는 차량 수 범위 (리무진은 제외)
 //   spawnDelay      탈출이 생긴 뒤 새 차량이 도착하기까지의 턴 수
 //
@@ -103,6 +105,7 @@ export const HARD_MODE = Object.freeze({
   safeCars: Object.freeze([3, 4]),
   safeBusMax: 1,
   safeLeave: Object.freeze([3, 5]),
+  targetMoves: Object.freeze([18, 26]),
   randomMin: 1,
   randomMax: 4,
   spawnDelay: 3,
