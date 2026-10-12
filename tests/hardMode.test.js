@@ -6,10 +6,11 @@ import {
   checkHardStuck, generateHardPuzzle, hardScore,
 } from '../src/core/hardMode.js';
 import { minLeaveSafeMoves } from '../src/core/hardSolver.js';
+import { HARD_GEN_DEFAULTS } from '../src/core/hardGenerator.js';
 import { HARD_MODE } from '../src/core/levels.js';
 import { createRng } from '../src/core/random.js';
 import {
-  EXITED, EMPTY, OFF_BOARD, buildGrid, createPuzzle, getMove, applyMove, isCleared, listMoves, travel, vehicleCells,
+  EXITED, EMPTY, BLOCK, OFF_BOARD, buildGrid, createPuzzle, getMove, applyMove, isCleared, listMoves, travel, vehicleCells,
 } from '../src/core/rules.js';
 import { parseTextBoard } from '../src/core/textBoard.js';
 import { board, idOf } from './helpers.js';
@@ -124,6 +125,82 @@ test('판 생성: 리무진마다 안전구역을 벗어나는 데만 최소 3~5
       assert.ok(r.length >= HARD_MODE.safeLeave[0] && r.length <= HARD_MODE.safeLeave[1], `벗어나는 최소 ${r.length}수`);
     }
     assert.deepEqual(leave.map((r) => r.length), g.leaveSafe, '생성기가 잰 값과 같다');
+  }
+});
+
+/**
+ * 리무진 통로(안전구역 밖 부분)마다: 그 칸을 막는 차들 — [{ limo, sign, blockers: [차 번호], cells: [{x, y}] }]
+ */
+function changePassages(puzzle) {
+  const z = zoneLayout(puzzle.size, HARD_MODE.safeSize);
+  const grid = buildGrid(puzzle, puzzle.start);
+  const out = [];
+  for (const L of puzzle.vehicles.filter((v) => v.kind === 'limo')) {
+    for (const sign of [-1, 1]) {
+      const cells = [];
+      const blockers = [];
+      for (let c = sign > 0 ? puzzle.start[L.id] + L.len : puzzle.start[L.id] - 1; c >= 0 && c < puzzle.size; c += sign) {
+        const [x, y] = L.axis === 'h' ? [c, L.lane] : [L.lane, c];
+        if (isSafeCell(z, x, y)) continue;
+        cells.push({ x, y });
+        const g = grid[y * puzzle.size + x];
+        if (g > 0 && !blockers.includes(g - 1)) blockers.push(g - 1);
+      }
+      out.push({ limo: L, sign, blockers, cells });
+    }
+  }
+  return out;
+}
+
+test('판 생성: 리무진 통로 4개(안전구역 밖 부분) 모두 막는 차 2~4대 — 쉬운 통로가 없다', () => {
+  const [lo, hi] = HARD_GEN_DEFAULTS.passageBlockers;
+  for (const { seed, puzzle } of hardBoards) {
+    const ps = changePassages(puzzle);
+    assert.equal(ps.length, 4);
+    for (const ps1 of ps) assert.ok(ps1.blockers.length >= lo && ps1.blockers.length <= hi, `${seed}: 막는 차 ${ps1.blockers.length}대`);
+  }
+});
+
+test('판 생성: 못 비키는 막는 차가 있다 — 한쪽 옆은 구조물, 반대쪽 길에는 다른 차 (연쇄), 연쇄는 3단계까지', () => {
+  let locked = 0;
+  let deepest = 0;
+  for (const { g, puzzle } of hardBoards) {
+    const grid = buildGrid(puzzle, puzzle.start);
+    const N = puzzle.size;
+    const at = (v, c) => (v.axis === 'h' ? v.lane * N + c : c * N + v.lane);
+    for (const { limo, blockers } of changePassages(puzzle)) {
+      for (const id of blockers) {
+        const v = puzzle.vehicles[id];
+        if (v.axis === limo.axis) continue;   // 가로지른 차만
+        const p = puzzle.start[id];
+        const t = limo.lane;   // 이 차가 비워야 할 칸 (자기 축 좌표)
+        const sides = [1, -1].map((side) => {
+          const n = side > 0 ? t - p + 1 : p + v.len - t;
+          const cells = [];
+          for (let k = 1; k <= n; k++) {
+            const c = side > 0 ? p + v.len - 1 + k : p - k;
+            if (c >= 0 && c < N) cells.push(grid[at(v, c)]);
+          }
+          return { wall: cells.length > 0 && cells[0] === BLOCK, car: cells.some((x) => x > 0) };
+        });
+        if (sides.some((a, i) => a.wall && sides[1 - i].car)) locked++;
+      }
+    }
+    deepest = Math.max(deepest, ...g.passages.map((ps) => ps.chain));
+  }
+  assert.ok(locked >= hardBoards.length * 2, `못 비키는 막는 차 ${locked}대`);
+  assert.equal(deepest, 3, '연쇄 3단계(막는 차 → 도우미 → 도우미의 도우미)도 있다');
+});
+
+test('판 생성: 통로 안에 길이 방향으로 누운 막는 차도 있다 (판 밖으로만 빠질 수 있다)', () => {
+  const collinear = hardBoards.flatMap(({ puzzle }) => changePassages(puzzle)
+    .flatMap(({ limo, blockers }) => blockers.filter((id) => puzzle.vehicles[id].axis === limo.axis)));
+  assert.ok(collinear.length >= 1);
+});
+
+test('판 생성: 변화구역 구조물의 일부는 통로 곁 연쇄에 쓰이고, 나머지는 흩어진다', () => {
+  for (const { g } of hardBoards) {
+    assert.ok(g.chainBlocks >= 6 && g.chainBlocks <= HARD_MODE.blocks / 2, `연쇄에 쓴 구조물 ${g.chainBlocks}개`);
   }
 });
 

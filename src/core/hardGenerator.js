@@ -6,10 +6,13 @@
 //
 // 짓는 순서
 //   1) 리무진 2대 — 안전구역 안에 가로 하나·세로 하나. 서로의 통로에 들어가지 않고, 차선끼리 떨어지게
-//   2) 변화구역 — 구조물을 흩고(리무진 차선은 피한다), 일반 차를 무작위로 채운다
-//   3) 안전구역 — 일반 차 3~4대(버스는 최대 1대)를 리무진이 안전구역을 빠져나가는 길 위에 놓고, 구조물로 옆길을 막는다.
+//   2) 변화구역 통로 봉쇄 — 리무진 통로 4개(안전구역 밖 부분)마다 막는 차 2~4대. 일부는 구조물·도우미 차로 잠가
+//      '못 비키는 차'를 만들고(연쇄 2~3단계), 일부는 통로 안에 길이 방향으로 눕힌다
+//   3) 변화구역 나머지 — 남은 구조물을 흩고, 남은 일반 차를 무작위로 채운다 (둘 다 리무진 차선은 피한다 —
+//      통로를 막는 차는 2)에서 설계한 차뿐이다)
+//   4) 안전구역 — 일반 차 3~4대(버스는 최대 1대)를 리무진이 안전구역을 빠져나가는 길 위에 놓고, 구조물로 옆길을 막는다.
 //      리무진마다 '안전구역을 벗어나는 최소 수'가 safeLeave 범위에 들 때까지 배치를 다시 뽑는다
-//   4) 리무진 둘을 모두 빼는 최소 수(랜덤 이동 없음)를 재어 풀리는 판만 쓴다
+//   5) 리무진 둘을 모두 빼는 최소 수(랜덤 이동 없음)를 재어 풀리는 판만 쓴다
 //
 // ⚠️ 같은 시드 → 같은 판. 난수는 시드 난수 하나에서만 뽑고, 솔버 상한도 시간이 아니라 상태 수다.
 // ⚠️ 구조물은 리무진 차선(가로 리무진의 행 전체, 세로 리무진의 열 전체)에 절대 놓지 않는다 — 놓으면 그 통로는 영영 못 쓴다.
@@ -19,7 +22,7 @@ import { createPuzzle, EMPTY, BLOCK, VEHICLE_LENGTH } from './rules.js';
 import { minEscapeMoves, minLeaveSafeMoves } from './hardSolver.js';
 
 /** 생성 규칙을 바꾸면 올릴 것 — 저장해 둔 판 캐시가 이 값으로 무효가 된다 */
-export const HARD_GENERATOR_VERSION = 1;
+export const HARD_GENERATOR_VERSION = 2;
 
 // HARD_MODE에 없으면 쓰는 값 (safeCars·safeBusMax·safeLeave는 HARD_MODE에서 조정한다). 나머지는 생성기 내부 조절값 —
 // config.gen으로 덮어쓸 수 있다 (실험·보고서용)
@@ -32,11 +35,17 @@ export const HARD_GEN_DEFAULTS = Object.freeze({
   solverNodes: 15000,      // 최소 수 탐색 상한 (상태 수, 리무진 한 대 탐색마다) — 넘으면 그 판은 버린다
   leaveNodes: 1000,        // 안전구역을 벗어나는 최소 수 탐색 상한 — 넘으면 그 배치는 버린다 (대개 너무 막힌 배치다)
   fillSamples: 8,          // 변화구역 차 한 대를 놓을 때 견줘 보는 자리 수 (바로 나갈 수 없는 자리를 고른다)
+  // 변화구역 통로 봉쇄 (통로 = 리무진 차선에서 안전구역 밖 부분, 리무진마다 앞뒤 둘)
+  passageBlockers: [2, 4], // 통로마다 막는 차 수
+  lockChance: 0.6,         // 가로지른 막는 차를 '못 비키게' 잠글 확률 (한쪽은 구조물, 다른 쪽은 도우미 차)
+  chainDepth: [2, 3],      // 잠근 차의 연쇄 길이 — 2 = 막는 차 + 도우미, 3 = 도우미도 잠근다
+  sideWallChance: 0.8,     // 잠그지 않은 막는 차·연쇄 끝의 도우미도 한쪽 옆을 구조물로 막을 확률 (비킬 방향이 하나가 된다)
+  collinearChance: 0.35,   // 통로마다 막는 차 하나를 통로 안에 길이 방향으로 눕힐 확률 (그 차는 판 밖으로만 빠질 수 있다)
 });
 
 // ── 짓는 판 ─────────────────────────────────────────────
 //   grid  칸 점유 (EMPTY / BLOCK / 차 번호 + 1)
-//   vs    차 { kind, len, axis, lane, p, role }  role: 'limo' | 'safe' | 'fill'
+//   vs    차 { kind, len, axis, lane, p, role }  role: 'limo' | 'safe' | 'blocker' | 'helper' | 'fill'
 //   blocks [[x, y], ...]
 
 function cellIdx(N, axis, lane, c) {
@@ -141,7 +150,176 @@ function laneCells(b, limos) {
   return set;
 }
 
-// ── 2) 변화구역 ─────────────────────────────────────────
+// ── 2) 변화구역 통로 봉쇄 ─────────────────────────────────
+//   통로 = 리무진 차선 중 안전구역 밖 부분 (경계 바로 바깥 칸 → 판 끝). 리무진마다 앞뒤 둘, 모두 넷.
+//   ★ 넷 모두 막는다 — 하나라도 비어 있으면 리무진이 그 길로 바로 나가 다른 설계가 소용없다.
+//   - 가로지른 차(통로와 수직)는 lockChance로 잠근다: 통로에서 비켜날 두 쪽 중 한쪽 바로 옆에 구조물,
+//     다른 쪽 길에 도우미 차. 그러면 도우미가 먼저 비켜야 막는 차가 비킬 수 있다(연쇄 2단계). 도우미도 같은 식으로
+//     잠그면 3단계. 구조물이 통로 곁에 모여 '구조물의 3분의 1쯤은 연쇄에 쓰인다'가 된다
+//   - 통로 안에 길이 방향으로 누운 차는 판 밖으로 나가는 수밖에 없다 — 그보다 바깥에 있는 막는 차가 먼저 빠져야 한다
+//   ⚠️ 막는 차·도우미·구조물은 다른 리무진의 차선을 피한다. 통로를 막는 차 수가 설계와 어긋나지 않게 한다
+
+/** 리무진의 통로(sign 쪽) 칸 좌표 — 리무진 축 방향 좌표, 경계 바로 바깥부터 판 끝까지 */
+function passageCoords(b, sign) {
+  const out = [];
+  if (sign > 0) for (let c = b.hi + 1; c < b.N; c++) out.push(c);
+  else for (let c = b.lo - 1; c >= 0; c--) out.push(c);
+  return out;
+}
+
+/** 변화구역에 놓을 수 있고 피할 칸(차선)에 걸리지 않는가 — except는 일부러 걸치는 칸 하나 (통로를 가로지르는 칸) */
+function fitsAvoiding(b, axis, lane, p, len, avoid, except = -1) {
+  if (!fits(b, axis, lane, p, len, 'change')) return false;
+  return cellsOf(b, axis, lane, p, len).every((k) => k === except || !avoid.has(k));
+}
+
+/** 구조물을 놓을 수 있는 칸인가 — 판 안·빈칸·변화구역·차선 아님·비워 둘 칸(keep) 아님 */
+function canWall(b, axis, lane, c, avoid, keep) {
+  if (c < 0 || c >= b.N) return false;
+  const k = cellIdx(b.N, axis, lane, c);
+  return b.grid[k] === EMPTY && !avoid.has(k) && !keep.has(k) && !isSafe(b, k % b.N, Math.floor(k / b.N));
+}
+
+/**
+ * v가 side 쪽으로 [t0, t1]을 비우려면 지나갈 칸 — 구조물을 놓지 않을 칸(keep)으로 남겨 둔다.
+ * ⚠️ 한쪽을 구조물로 막은 차의 반대쪽 길에 나중에 흩는 구조물이 떨어지면 그 차는 영영 못 비키고 통로가 죽는다
+ */
+function keepSweep(b, v, t0, t1, side, keep) {
+  const n = side > 0 ? t1 - v.p + 1 : v.p + v.len - t0;
+  for (let k = 1; k <= n; k++) {
+    const c = side > 0 ? v.p + v.len - 1 + k : v.p - k;
+    if (c >= 0 && c < b.N) keep.add(cellIdx(b.N, v.axis, v.lane, c));
+  }
+}
+
+/**
+ * id번 차가 자기 차선의 [t0, t1]을 비우지 못하게 잠근다 — 한쪽 바로 옆에 구조물, 다른 쪽 길에 도우미 차.
+ * depth: 이 차부터 센 연쇄 길이 (2면 도우미까지, 3이면 도우미도 잠근다)
+ * 잠그지 않는 차(depth 1, 연쇄의 끝)도 sideWallChance로 한쪽 옆만 구조물로 막아 둔다 — 비킬 방향이 하나로 정해지고,
+ * 나중에 무작위로 채운 차가 반대쪽 길에 서면 저절로 연쇄가 한 단계 더 생긴다
+ * @returns 실제로 만든 연쇄 길이 (잠그지 못했으면 1)
+ */
+function lockVehicle(b, rng, id, t0, t1, depth, avoid, budget, g) {
+  const v = b.vs[id];
+  if (depth < 2 || budget.blocks <= 0 || budget.vehicles <= 0) {
+    let walled = 0;
+    if (budget.blocks > 0 && rng.chance(g.sideWallChance)) {
+      for (const side of rng.shuffle([1, -1])) {
+        const c = side > 0 ? v.p + v.len : v.p - 1;
+        if (!canWall(b, v.axis, v.lane, c, avoid, budget.keep)) continue;
+        addBlock(b, cellIdx(b.N, v.axis, v.lane, c));
+        budget.blocks--;
+        walled = side;
+        break;
+      }
+    }
+    // 남은 쪽(막지 않았으면 양쪽) 길은 구조물 없이 남긴다
+    for (const side of [1, -1]) if (side !== walled) keepSweep(b, v, t0, t1, side, budget.keep);
+    return 1;
+  }
+  const sides = rng.shuffle([1, -1]);
+  for (const wallSide of sides) {
+    const helpSide = -wallSide;
+    // 구조물 칸 = 막을 쪽 끝 바로 옆
+    const wallC = wallSide > 0 ? v.p + v.len : v.p - 1;
+    if (!canWall(b, v.axis, v.lane, wallC, avoid, budget.keep)) continue;
+    // 도우미가 서야 할 길 = 반대쪽으로 [t0, t1]을 비우려고 지나갈 칸 (판 안만)
+    const n = helpSide > 0 ? t1 - v.p + 1 : v.p + v.len - t0;
+    const sweep = [];
+    for (let k = 1; k <= n; k++) {
+      const c = helpSide > 0 ? v.p + v.len - 1 + k : v.p - k;
+      if (c >= 0 && c < b.N) sweep.push(c);
+    }
+    if (sweep.length === 0) continue;   // 판 끝에 붙어 있다 — 그쪽으로는 그냥 나가 버린다
+    const helper = placeHelper(b, rng, v, sweep, helpSide, avoid, budget);
+    if (!helper) continue;
+    addBlock(b, cellIdx(b.N, v.axis, v.lane, wallC));
+    budget.blocks--;
+    // 도우미도 잠근다 — 가로지른 도우미는 v 차선의 한 칸을, 같은 차선의 도우미는 v가 지나갈 칸 전부를 비워야 한다
+    const h = b.vs[helper.id];
+    const sub = h.axis !== v.axis
+      ? lockVehicle(b, rng, helper.id, v.lane, v.lane, depth - 1, avoid, budget, g)
+      : lockVehicle(b, rng, helper.id, Math.min(...sweep), Math.max(...sweep), depth - 1, avoid, budget, g);
+    return 1 + sub;
+  }
+  return lockVehicle(b, rng, id, t0, t1, 1, avoid, budget, g);   // 잠그지 못했다 — 한쪽 옆만이라도
+}
+
+/** v가 helpSide로 지나갈 칸(sweep)에 도우미 차 한 대 — 가로지르게(7할) 또는 v 차선에 이어서 */
+function placeHelper(b, rng, v, sweep, helpSide, avoid, budget) {
+  const kind = budget.buses > 0 && rng.chance(budget.busRatio) ? 'bus' : 'car';
+  const len = VEHICLE_LENGTH[kind];
+  const options = [];
+  if (rng.chance(0.7)) {
+    const axis = v.axis === 'h' ? 'v' : 'h';
+    for (const c of sweep) {
+      // c = v 축 좌표 → 도우미의 차선(lane)은 c, 도우미 축 방향에서 v.lane을 덮어야 한다
+      for (let p = v.lane - len + 1; p <= v.lane; p++) if (fitsAvoiding(b, axis, c, p, len, avoid)) options.push({ axis, lane: c, p });
+    }
+  }
+  if (options.length === 0) {
+    // 같은 차선 — v 끝 바로 다음부터 len칸
+    const p = helpSide > 0 ? v.p + v.len : v.p - len;
+    if (fitsAvoiding(b, v.axis, v.lane, p, len, avoid)) options.push({ axis: v.axis, lane: v.lane, p });
+  }
+  if (options.length === 0) return null;
+  const o = rng.pick(options);
+  budget.vehicles--;
+  if (kind === 'bus') budget.buses--;
+  return { id: addVehicle(b, { kind, len, axis: o.axis, lane: o.lane, p: o.p, role: 'helper' }) };
+}
+
+/**
+ * 통로 하나를 막는다. @returns { blockers: 막는 차 번호들, chain: 가장 긴 연쇄 } | null (막는 차를 다 못 놓았다)
+ */
+function blockPassage(b, rng, limoId, sign, g, avoid, budget) {
+  const L = b.vs[limoId];
+  const coords = passageCoords(b, sign);
+  const want = rng.range(g.passageBlockers[0], g.passageBlockers[1]);
+  const blockers = [];
+  let chain = 1;
+  const pickKind = () => (budget.buses > 0 && rng.chance(budget.busRatio) ? 'bus' : 'car');
+  const laneCell = (c) => cellIdx(b.N, L.axis, L.lane, c);
+
+  // 길이 방향으로 눕힌 차 (통로당 최대 1대)
+  if (rng.chance(g.collinearChance) && budget.vehicles > 0) {
+    const kind = pickKind();
+    const len = VEHICLE_LENGTH[kind];
+    const starts = [];
+    for (let i = 0; i + len <= coords.length; i++) {
+      const cs = coords.slice(i, i + len);
+      const p = Math.min(...cs);
+      if (fits(b, L.axis, L.lane, p, len, 'change')) starts.push(p);
+    }
+    if (starts.length > 0) {
+      const p = rng.pick(starts);
+      blockers.push(addVehicle(b, { kind, len, axis: L.axis, lane: L.lane, p, role: 'blocker' }));
+      budget.vehicles--;
+      if (kind === 'bus') budget.buses--;
+    }
+  }
+  // 가로지른 차 — 남은 수만큼, 통로의 빈칸 중 무작위로
+  for (let tries = 0; blockers.length < want && tries < 40 && budget.vehicles > 0; tries++) {
+    const free = coords.filter((c) => b.grid[laneCell(c)] === EMPTY);
+    if (free.length === 0) break;
+    const c = rng.pick(free);
+    const kind = pickKind();
+    const len = VEHICLE_LENGTH[kind];
+    const axis = L.axis === 'h' ? 'v' : 'h';
+    const ps = [];
+    for (let p = L.lane - len + 1; p <= L.lane; p++) if (fitsAvoiding(b, axis, c, p, len, avoid, laneCell(c))) ps.push(p);
+    if (ps.length === 0) continue;
+    const id = addVehicle(b, { kind, len, axis, lane: c, p: rng.pick(ps), role: 'blocker' });
+    budget.vehicles--;
+    if (kind === 'bus') budget.buses--;
+    blockers.push(id);
+    const depth = rng.chance(g.lockChance) ? rng.range(g.chainDepth[0], g.chainDepth[1]) : 1;
+    chain = Math.max(chain, lockVehicle(b, rng, id, L.lane, L.lane, depth, avoid, budget, g));
+  }
+  return blockers.length >= g.passageBlockers[0] ? { limo: limoId, sign, blockers, chain } : null;
+}
+
+// ── 3) 변화구역 나머지 ─────────────────────────────────────
 
 function scatterBlocks(b, rng, count, forbidden) {
   const cells = [];
@@ -154,8 +332,9 @@ function scatterBlocks(b, rng, count, forbidden) {
 /**
  * 변화구역을 일반 차로 채운다. 한 대마다 무작위 자리를 몇 개 뽑아, 놓자마자 나갈 수 없는 자리를 먼저 고른다
  * (전부 나갈 수 있는 자리면 그중 하나). 버스(3칸)부터 — 3칸 빈 줄은 판이 찰수록 금방 사라진다.
+ * @param avoid 놓지 않을 칸 (리무진 차선 — 통로를 막는 차는 설계한 차뿐이어야 한다)
  */
-function fillChangeZone(b, rng, cars, buses, samples) {
+function fillChangeZone(b, rng, cars, buses, samples, avoid) {
   const kinds = [...Array(buses).fill('bus'), ...Array(cars).fill('car')];
   for (const kind of kinds) {
     const len = VEHICLE_LENGTH[kind];
@@ -166,6 +345,7 @@ function fillChangeZone(b, rng, cars, buses, samples) {
       const lane = rng.int(b.N);
       const p = rng.int(b.N - len + 1);
       if (!fits(b, axis, lane, p, len, 'change')) continue;
+      if (cellsOf(b, axis, lane, p, len).some((k) => avoid.has(k))) continue;
       seen++;
       const exitable = clearToEdge(b, axis, lane, p, len, -1) || clearToEdge(b, axis, lane, p, len, 1);
       if (!pick || (pick.exitable && !exitable)) pick = { axis, lane, p, exitable };
@@ -177,7 +357,7 @@ function fillChangeZone(b, rng, cars, buses, samples) {
   return true;
 }
 
-// ── 3) 안전구역 ─────────────────────────────────────────
+// ── 4) 안전구역 ─────────────────────────────────────────
 
 /**
  * 리무진이 안전구역을 빠져나가는 길 4갈래 (A 왼쪽·오른쪽, B 위·아래) — 리무진에서 안전구역 경계까지의 칸.
@@ -309,7 +489,8 @@ function leaveSafeOf(b, puzzle, limoId, opts) {
 /**
  * 하드 모드 판 하나.
  * @param config HARD_MODE (size, safeSize, startVehicles, busRatio, limos, blocks, safeBlocks, safeCars, safeBusMax, safeLeave, gen?)
- * @returns {{ def, par, solution, leaveSafe: [A, B], attempts, ms }}
+ * @returns {{ def, par, solution, leaveSafe, passages: [{ blockers, chain }] ×4, chainBlocks, attempts, ms }}
+ *   leaveSafe — 리무진마다 안전구역을 벗어나는 최소 수 (판의 리무진 번호 순)
  *   par — 랜덤 이동이 없다면 리무진 둘을 모두 빼는 최소 수 (관련 차만 움직인 수순 — 실제 최소의 상한)
  */
 export function generateHardBoard(config, seed) {
@@ -327,10 +508,22 @@ export function generateHardBoard(config, seed) {
 
     const nSafe = rng.range(g.safeCars[0], g.safeCars[1]);
     const safeBuses = Math.min(g.safeBusMax, totalBuses, rng.chance(0.5) ? 1 : 0);
-    scatterBlocks(b, rng, config.blocks, lanes);
-    const outside = config.startVehicles - nSafe;
-    const outBuses = totalBuses - safeBuses;
-    if (!fillChangeZone(b, rng, outside - outBuses, outBuses, g.fillSamples)) continue;
+    // 변화구역에 쓸 몫 — 통로 봉쇄가 먼저 쓰고, 남은 것을 흩고 채운다
+    const budget = {
+      vehicles: config.startVehicles - nSafe,
+      buses: totalBuses - safeBuses,
+      blocks: config.blocks,
+      busRatio: config.busRatio,
+      keep: new Set(),   // 구조물을 놓지 않을 칸 — 설계한 차가 비켜날 길
+    };
+    const passages = [];
+    for (const id of limos.ids) {
+      for (const sign of [-1, 1]) passages.push(blockPassage(b, rng, id, sign, g, lanes, budget));
+    }
+    if (passages.some((ps) => !ps)) continue;
+    const chainBlocks = config.blocks - budget.blocks;
+    scatterBlocks(b, rng, budget.blocks, new Set([...lanes, ...budget.keep]));
+    if (!fillChangeZone(b, rng, budget.vehicles - budget.buses, budget.buses, g.fillSamples, lanes)) continue;
 
     // 안전구역 — 리무진마다 벗어나는 최소 수가 범위에 들 때까지 다시 뽑는다.
     // ★ 먼저 안전구역을 비워 둔 채로 재 본다. 안전구역의 차·구조물은 길을 더 막을 뿐이므로, 빈 채로도 상한을 넘으면
@@ -361,13 +554,25 @@ export function generateHardBoard(config, seed) {
     }
     if (!leave) continue;
 
-    const { def } = toDef(b, rng);
+    const { def, order } = toDef(b, rng);
     const puzzle = createPuzzle(def);
     const limoIds = puzzle.vehicles.filter((v) => v.kind === 'limo').map((v) => v.id);
+    // 판 정의는 차 순서를 섞었으므로, 리무진별 값도 섞은 뒤의 순서(판의 리무진 번호 순)로 돌려준다
+    const leaveByLimo = limoIds.map((id) => leave[limos.ids.indexOf(order[id])]);
     const r = minEscapeMoves(puzzle, puzzle.start, limoIds, solveOpts);
     if (g.stats) tally(g.stats, 'escape', r);
     if (!r.solved) continue;
-    return { def, par: r.length, solution: r.moves, leaveSafe: leave, attempts: attempt, ms: Date.now() - t0 };
+    return {
+      def,
+      par: r.length,
+      solution: r.moves,
+      leaveSafe: leaveByLimo,
+      // 통로마다 (설계한) 막는 차 수와 가장 긴 연쇄 — 보고서용
+      passages: passages.map((ps) => ({ blockers: ps.blockers.length, chain: ps.chain })),
+      chainBlocks,   // 변화구역 구조물 중 연쇄(잠금)에 쓴 수
+      attempts: attempt,
+      ms: Date.now() - t0,
+    };
   }
   throw new Error('하드 모드 판을 만들지 못했어요.');
 }
