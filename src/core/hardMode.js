@@ -471,31 +471,38 @@ export function describeHardScore(cfg = HARD_MODE.score) {
 
 // ── 판 만들기 ───────────────────────────────────────────
 
+/** 변화구역이 이 비율보다 많이 차면 '안에서 밖으로 바짝' 채운다 (그보다 덜 차면 차가 판 곳곳에 섞여 놓인다) */
+const PACK_FILL = 0.7;
+
 /**
  * HARD_MODE 설정 → 생성기 설정.
  *   - 일반 차·구조물은 변화구역에만, 리무진은 안전구역에 (generator의 safeSize·limos)
- *   - 칸의 90%를 채우므로 '안에서 밖으로 바짝' 채우는 방식(pack)을 쓰고, 구조물은 안전구역에 붙여 두른다 (blockBand)
- *   - 바로 나갈 수 있는 차 수 조건은 두지 않는다 — 이 밀도에서는 가장자리 줄의 차가 대부분 바로 나갈 수 있다
+ *   - 변화구역이 빽빽하면(PACK_FILL 넘게) '안에서 밖으로 바짝' 채운다 (pack). 이때는 차가 안쪽에 몰리고 바깥이 비므로,
+ *     넉넉할 때는 쓰지 않는다 — 그래야 차와 구조물이 판 곳곳에 섞인다
+ *   - 구조물은 blockBand가 없으면 변화구역 곳곳에 흩는다
  *   - 랜덤 이동이 있으니 '밀어 두기 고리'는 넣지 않는다
  */
 export function hardPuzzleParams(config = HARD_MODE) {
   const buses = Math.round(config.startVehicles * config.busRatio);
+  const cars = config.startVehicles - buses;
   const lo = (config.size - config.safeSize) / 2;   // 안전구역이 시작하는 고리 번호
+  const changeCells = config.size ** 2 - config.safeSize ** 2;
+  const fill = (cars * 2 + buses * 3 + config.blocks) / changeCells;
   return {
     size: config.size,
-    cars: config.startVehicles - buses,
+    cars,
     buses,
     blocks: config.blocks,
     safeSize: config.safeSize,
     limos: config.limos ?? 0,
     goal: 'limo',
-    pack: true,
+    pack: fill > PACK_FILL,
     blockDepth: config.blockBand ? [Math.max(0, lo - config.blockBand), lo - 1] : null,
     minSlides: 0,
     maxSlides: 99,
     loops: 0,
     repairPulls: 0,
-    maxExitable: 9999,
+    maxExitable: config.maxExitable ?? 9999,
     attempts: 60,
   };
 }

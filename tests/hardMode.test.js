@@ -59,7 +59,20 @@ test('구역: 25×25에서 안전구역은 정중앙 7×7(9~15), 바깥 9칸이 
 
 // ── 판 생성 ─────────────────────────────────────────────
 
-test('판 생성: 일반 차 200대(버스 30%)는 변화구역에만, 리무진 2대는 안전구역에, 랜덤 이동이 없다면 리무진을 모두 뺄 수 있다', () => {
+test('판 생성: 구조물은 변화구역 곳곳에 차와 섞여 흩어진다 (안전구역에 붙여 두르지 않는다)', () => {
+  const z = zoneLayout(25, 7);
+  for (const { puzzle } of hardBoards) {
+    const ring = (b) => Math.min(b.x, b.y, 24 - b.x, 24 - b.y);
+    assert.ok(puzzle.blocks.every((b) => !isSafeCell(z, b.x, b.y)), '안전구역에는 구조물이 없다');
+    assert.ok(puzzle.blocks.some((b) => ring(b) <= 2), '가장자리 쪽에도 구조물이 있다');
+    assert.ok(puzzle.blocks.some((b) => ring(b) >= 6), '안쪽에도 구조물이 있다');
+    // 차도 바깥 고리까지 고루 놓인다 (안쪽부터 빽빽이 채우는 방식이 아니다)
+    const outerVehicles = puzzle.vehicles.filter((v) => vehicleCells(puzzle, v.id, puzzle.start[v.id]).some((c) => ring(c) <= 2));
+    assert.ok(outerVehicles.length >= 10);
+  }
+});
+
+test('판 생성: 설정한 수의 일반 차(버스 30%)는 변화구역에만, 리무진 2대는 안전구역에, 랜덤 이동이 없다면 리무진을 모두 뺄 수 있다', () => {
   const p = hardPuzzleParams();
   const z = zoneLayout(25, 7);
   for (const { g, puzzle } of hardBoards) {
@@ -67,7 +80,6 @@ test('판 생성: 일반 차 200대(버스 30%)는 변화구역에만, 리무진
     const limos = puzzle.vehicles.filter((v) => v.kind === 'limo');
     assert.equal(puzzle.size, 25);
     assert.equal(regular.length, HARD_MODE.startVehicles);
-    assert.equal(HARD_MODE.startVehicles, 200);
     assert.equal(regular.filter((v) => v.kind === 'bus').length, p.buses);
     assert.equal(limos.length, 2);
     assert.equal(puzzle.blocks.length, HARD_MODE.blocks);
