@@ -81,16 +81,20 @@ export function freeSettingsProblem(s) {
 //   startVehicles   시작 차량 수, busRatio 그중 버스 비율 (새로 도착하는 차량의 종류도 이 비율로 뽑는다)
 //   blocks          고정 구조물 수
 //   maxExitable     시작하자마자 바로 나갈 수 있는 차량 수 상한 (판 생성 조건)
+//                   ⚠️ 차가 많을수록 가장자리 줄이 차서 바로 나가는 차가 늘어난다 — 100대·구조물 60개면 35~50대가 보통이다.
+//                   상한을 못 맞추면 생성기가 40번 지어 그중 가장 적은 판을 고른다 (그래서 너무 낮게 잡으면 매번 40번을 다 돈다)
 //   randomMin/Max   한 턴에 변화구역에서 저절로 움직이는 차량 수 범위
 //   spawnDelay      탈출이 생긴 뒤 새 차량이 도착하기까지의 턴 수
+//
+// 2026-10-12: 차량·구조물을 두 배로 (50 → 100, 30 → 60)
 
 export const HARD_MODE = Object.freeze({
   size: 25,
   safeSize: 5,
-  startVehicles: 50,
+  startVehicles: 100,
   busRatio: 0.3,
-  blocks: 30,
-  maxExitable: 8,
+  blocks: 60,
+  maxExitable: 35,
   randomMin: 1,
   randomMax: 4,
   spawnDelay: 3,
